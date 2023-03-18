@@ -1,66 +1,24 @@
 -module(pr). %processing
--export([get_input/0, save_data/2]).
--define(SPLIT(X), string:split(string:trim(X), " ", all)).
+-export([get_input/0]).
 
-% Coordinator function to get the file contating the input
 get_input() ->
-	File_name = string:chomp(io:get_line("Input file to process: ")),
-	case file:open(File_name, [read, raw]) of
-		{ok, File} ->
-			read_file(File);
-		{error, Reason} ->
-			io:format("Error: ~p~n", [Reason]),
-			get_input()
-	end.
+	Read = string:chomp(io:get_line("Input file to process: ")),
+	{ok, File} = file:open(Read, [read, raw]),
+	{ok, Data} = read_file(File),
+	Data.
 
-% Read the file line by line and process it
-% The first line contains the operations to be performed, the funtions and evntually the arguments
-% The second line contains the types of the variables
+% Read file
+% Note: the input is parsed as a list of strings
+% If a non ASCII / UTF-8 character is found, the string is broken and output as a list of integers
 read_file(File) ->
-	{ok, Header} = file:read_line(File),
-	{Op, Fun, Args} = split_header(Header),
-	{ok, Types} = file:read_line(File),
-	{Key_type, Value_type} = split_types(Types),
-	{ok, Op, Fun, Args,
-	 read_file(File, file:read_line(File), Key_type, Value_type, [])}.
+	read_file(File, []).
 
-read_file(File, {ok, Line}, Key_type, Value_type, Acc) ->
-	[Key, Value] = ?SPLIT(Line),
-	Key_ = parse(Key, Key_type),
-	Value_ = parse(Value, Value_type),
-	read_file(File, file:read_line(File), Key_type, Value_type, [{Key_, Value_} | Acc]);
-
-read_file(File, eof, _, _, Acc) ->
-	file:close(File),
-	lists:reverse(Acc).
-
-% UTILITY FUNCTIONS:
-% Split the types line into the types of the variables, converting them to atoms
-split_header(Header) ->
-	[Op, Fun | Args] = ?SPLIT(Header),
-	{erlang:list_to_atom(Op),
-	 erlang:list_to_atom(Fun),
-	 lists:map(fun(X)-> apply(erlang, list_to_integer, [X]) end, Args)}.
-
-split_types(Types) ->
-	[K_, V_] = ?SPLIT(Types),
-	{erlang:list_to_atom(K_),
-	 erlang:list_to_atom(V_)}.
-
-% Split the header line into the operations to be performed, the functions and eventually the arguments
-parse(V, V_type) ->
-	case V_type of 
-		int -> erlang:list_to_integer(V);
-		float -> erlang:list_to_float(V);
-		atom -> erlang:list_to_atom(V);
-		string -> V;
-		_ -> V
+read_file(File, Acc) ->
+	case file:read_line(File) of
+		{ok, Line} ->
+			read_file(File, [string:chomp(Line) | Acc]);
+		eof ->
+			file:close(File),
+			{ok, lists:reverse(Acc)}
 	end.
 
-save_data(File_name, Data) ->
-	% data is in form of [{Key, Value}, ...]
-	% must be written as Key Value\n
-	Serialized_data =
-	  lists:foldl(fun({K, V}, Acc) -> Acc ++ io_lib:format("~p ~p~n", [K, V])
-	  end, "", Data),
-	file:write_file("out/"++File_name, Serialized_data).
