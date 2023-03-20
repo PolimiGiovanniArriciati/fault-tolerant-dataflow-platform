@@ -1,5 +1,6 @@
 -module('ds').
 -export([c/0, c1/0, w/0, w1/0, worker/0, worker/2, coordinator_start/0, coordinator_start/1, accept_connection/2, coordinator_listener/2, coordinator/1, dispatch_work/1, get_result/3]).
+-importlib([pr]).
 
 c() ->
     coordinator_start(8080).
@@ -82,7 +83,8 @@ coordinator_loop(Scheduler).
 
 % TODO - in this case is not taken into consideration the case of
 % non ready processes for the data. During the scheduling, also, it might fail
-% the last ready W, leaving no nodes R to take the input...
+% the last ready Worker,
+% leaving no nodes ready to take the input...
 % In this case, send_work what should do?
 % Notify the sending process was unsuccessful and give a non send input to be
 % reschedule when the receive routine gets the result back?
@@ -92,15 +94,14 @@ send_work(_, _ ,[], BusyWMap) ->
 
 send_work([ReadyW | RWList], Function, [Input | InList], BusyWMap) ->
     io:format("Send work full"),
-    SendOutcome = gen_tcp:send(ReadyW, {work, Function, Input}),
-    case SendOutcome of 
+    case gen_tcp:send(ReadyW, {work, Function, Input}) of 
         ok -> 
             NewBWMap = send_work(RWList, Function, InList, BusyWMap),
-            NewBWMap = maps:put(ReadyW,Input,BusyWMap);
+            NewBWMap = maps:put(ReadyW, Input, BusyWMap);
         % In this case an error has occured
         % TODO: it is possible to use a function to reunite the inputs
         %       and divide them again to respect of the others Ready workers
-        true -> 
+        _ ->
             NewBWMap = send_work(RWList, Function, [Input | InList], BusyWMap)
     end,
     NewBWMap.
@@ -112,24 +113,26 @@ send_work([ReadyW | RWList], Function, [Input | InList], BusyWMap) ->
 %    dispatch_work(ReadyWorker, BusyWMap);
 %    % TODO dispach the work and read the csv file 
 
-% Case at least one worker is on
+% Sends the work to the ready workers and waits for the results
 dispatch_work(ReadyWorker) ->
     EmptyMap = #{},
     BusyWMap = send_work(ReadyWorker, [], [], EmptyMap),
-    [NewReadyW, ResultMap] = get_result([], BusyWMap, EmptyMap),
+    [NewReadyW, ResultMap] = get_result([], BusyWMap, EmptyMap, #{}),
+    maps:values(ResultMap),
     io:format([ResultMap]),
-    dispatch_work(NewReadyW). 
+    dispatch_work(NewReadyW).
     
 
 get_result(ReadyW, #{}, ResultMap) ->
-    [ReadyW, ResultMap];
+    [ReadyW, ResultMap].
 
-get_result(ReadyW, BusyWMap, ResultsMap) ->
+get_result(ReadyW, BusyWMap, ResultsMap, SockOrderMap) ->
     receive 
         {Sock, result, Result} ->
             io:format(Result),
             io:format(Sock),
-            NewResultMap = ResultsMap#{Sock => Result},
+            #{Sock := Index} = SockOrderMap,
+            NewResultMap = ResultsMap#{Index => Result},
             NewBusyMap = maps:remove(Sock, BusyWMap),
             NewReadyW = [Sock | ReadyW];
             % TODO
