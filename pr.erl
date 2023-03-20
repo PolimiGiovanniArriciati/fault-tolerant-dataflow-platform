@@ -4,9 +4,14 @@
 
 % Coordinator function to get the file contating the input
 get_input() ->
-	Read = string:chomp(io:get_line("Input file to process: ")),
-	{ok, File} = file:open(Read, [read, raw]),
-	read_file(File).
+	File_name = string:chomp(io:get_line("Input file to process: ")),
+	case file:open(File_name, [read, raw]) of
+		{ok, File} ->
+			read_file(File);
+		{error, Reason} ->
+			io:format("Error: ~p~n", [Reason]),
+			get_input()
+	end.
 
 % Read the file line by line and process it
 %The first line contains the operations to be performed, the funtions and evntually the arguments
