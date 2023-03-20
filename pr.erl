@@ -14,8 +14,8 @@ get_input() ->
 	end.
 
 % Read the file line by line and process it
-%The first line contains the operations to be performed, the funtions and evntually the arguments
-%The second line contains the types of the variables
+% The first line contains the operations to be performed, the funtions and evntually the arguments
+% The second line contains the types of the variables
 read_file(File) ->
 	{ok, Header} = file:read_line(File),
 	{Op, Fun, Args} = split_header(Header),
@@ -37,13 +37,10 @@ read_file(File, eof, _, _, Acc) ->
 % UTILITY FUNCTIONS:
 % Split the types line into the types of the variables, converting them to atoms
 split_header(Header) ->
-	[Op_, Fun_, Args_] = ?SPLIT(Header),
-	{erlang:list_to_atom(Op_),
-	 erlang:list_to_atom(Fun_),
-	 case Args_ of
-	   [] -> [];
-		 _ -> erlang:list_to_integer(Args_)
-	 end}.
+	[Op, Fun | Args] = ?SPLIT(Header),
+	{erlang:list_to_atom(Op),
+	 erlang:list_to_atom(Fun),
+	 lists:map(fun(X)-> apply(erlang, list_to_integer, [X]) end, Args)}.
 
 split_types(Types) ->
 	[K_, V_] = ?SPLIT(Types),
