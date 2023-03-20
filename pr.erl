@@ -1,5 +1,5 @@
 -module(pr). %processing
--export([get_input/0]).
+-export([get_input/0, save_data/2]).
 -define(SPLIT(X), string:split(string:trim(X), " ", all)).
 
 % Coordinator function to get the file contating the input
@@ -54,3 +54,10 @@ parse(V, V_type) ->
 		_ -> erlang:list_to_atom(V)
 	end.
 
+save_data(File_name, Data) ->
+	% data is in form of [{Key, Value}, ...]
+	% must be written as Key Value\n
+	Serialized_data =
+	  lists:foldl(fun({K, V}, Acc) -> Acc ++ io_lib:format("~p ~p~n", [K, V])
+	  end, "", Data),
+	file:write_file("out/"++File_name, Serialized_data).
