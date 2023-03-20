@@ -51,7 +51,10 @@ split_types(Types) ->
 parse(V, V_type) ->
 	case V_type of 
 		int -> erlang:list_to_integer(V);
-		_ -> erlang:list_to_atom(V)
+		float -> erlang:list_to_float(V);
+		atom -> erlang:list_to_atom(V);
+		string -> V;
+		_ -> V
 	end.
 
 save_data(File_name, Data) ->
