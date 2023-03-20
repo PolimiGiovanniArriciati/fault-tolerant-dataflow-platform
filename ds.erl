@@ -1,5 +1,17 @@
 -module('ds').
--export([worker/0, worker/2, coordinator_start/0, coordinator_start/1, accept_connection/2, coordinator_listener/2, coordinator/1, dispatch_work/1, get_result/2]).
+-export([c/0, c1/0, w/0, w1/0, worker/0, worker/2, coordinator_start/0, coordinator_start/1, accept_connection/2, coordinator_listener/2, coordinator/1, dispatch_work/1, get_result/3]).
+
+c() ->
+    coordinator_start(8080).
+
+c1() ->
+    coordinator_start(8081).
+
+w() ->
+    worker().
+
+w1() -> 
+    worker("127.0.0.1", 8081).
 
 % Starts coordinator with default harcoded port 8080
 coordinator_start() ->
@@ -7,19 +19,16 @@ coordinator_start() ->
 
 % Starts an accept socket with the given port 
 coordinator_start(Port) ->
-    {Outcome, AcceptSock} = gen_tcp:listen(Port, [binary, {packet, 0}, {active, false}]),
-    if 
-        Outcome == error -> 
+    case gen_tcp:listen(Port, [binary, {packet, 0}, {active, false}]) of
+        {error, ErrorMessage} -> 
             io:format("Unexpected error launching the coordinator "),
-            io:format(AcceptSock);
-        true -> 
+            io:format(ErrorMessage);
+        {ok, AcceptSock} -> 
             io:format("AcceptSocket generated, ready to listen for new workers~n"),
             % accepts incoming connections from the workers
             Pid = spawn(?MODULE, coordinator, [[]]),
             accept_connection(Pid, AcceptSock)
-            %spawn(?MODULE, accept_connection, [self(), AcceptSock])
     end.
-    %coordinator([], []).
 
 % Coordinator has parameter R : ready workers (a list) and B: busy
 coordinator(ReadyW) ->
@@ -56,9 +65,11 @@ coordinator(ReadyW) ->
     end.
 
 coordinator_loop(Scheduler) ->
-    receive 
-        {_, join} ->
-            io:format("Coord_loop - TODO")          
+    receive
+        {Socket, join} ->
+            Scheduler ! {Socket, join};
+        {Socket, error} ->
+            Scheduler ! {Socket, error}
 end,
 coordinator_loop(Scheduler).
 
@@ -68,16 +79,24 @@ coordinator_loop(Scheduler).
 % to be processed
 % While in execution, it changes the mapping between busy workers (sockets) 
 % and the submitted input to that node
+
+% TODO - in this case is not taken into consideration the case of
+% non ready processes for the data. During the scheduling, also, it might fail
+% the last ready W, leaving no nodes R to take the input...
+% In this case, send_work what should do?
+% Notify the sending process was unsuccessful and give a non send input to be
+% reschedule when the receive routine gets the result back?
 send_work(_, _ ,[], BusyWMap) ->
     io:format("Send work empty"),
     BusyWMap;
+
 send_work([ReadyW | RWList], Function, [Input | InList], BusyWMap) ->
     io:format("Send work full"),
     SendOutcome = gen_tcp:send(ReadyW, {work, Function, Input}),
     case SendOutcome of 
         ok -> 
             NewBWMap = send_work(RWList, Function, InList, BusyWMap),
-            NewBWMap#{ReadyW => Input};
+            NewBWMap = maps:put(ReadyW,Input,BusyWMap);
         % In this case an error has occured
         % TODO: it is possible to use a function to reunite the inputs
         %       and divide them again to respect of the others Ready workers
@@ -97,39 +116,52 @@ send_work([ReadyW | RWList], Function, [Input | InList], BusyWMap) ->
 dispatch_work(ReadyWorker) ->
     EmptyMap = #{},
     BusyWMap = send_work(ReadyWorker, [], [], EmptyMap),
-    get_result(BusyWMap, EmptyMap). 
+    [NewReadyW, ResultMap] = get_result([], BusyWMap, EmptyMap),
+    io:format([ResultMap]),
+    dispatch_work(NewReadyW). 
     
-get_result({}, ResultMap) ->
-    ResultMap;
 
-get_result(BusyWMap, ResultsMap) ->
+get_result(ReadyW, #{}, ResultMap) ->
+    [ReadyW, ResultMap];
+
+get_result(ReadyW, BusyWMap, ResultsMap) ->
     receive 
         {Sock, result, Result} ->
             io:format(Result),
             io:format(Sock),
             NewResultMap = ResultsMap#{Sock => Result},
-            NewBusyMap = maps:remove(Sock, BusyWMap);
+            NewBusyMap = maps:remove(Sock, BusyWMap),
+            NewReadyW = [Sock | ReadyW];
             % TODO
         {Sock, error} ->
-            NewBusyMap = BusyWMap,
+            NewBusyMap = maps:remove(Sock, BusyWMap),
             NewResultMap = ResultsMap,
-            io:format(Sock);
+            io:format(Sock),
+            
+            %TODO - reschedule the job
+            NewReadyW = ReadyW
+            %BusyWUpToNow = maps:remove(Sock, BusyWMap),
+            %send_work(ReadyW, )
+            ;
             % TODO
         {Sock, join} ->
             NewResultMap = ResultsMap,
             NewBusyMap = BusyWMap,
+            NewReadyW = [Sock, ReadyW],
             io:format(Sock);
         _ ->
+            io:write("Unrecognized message"),
             NewResultMap = ResultsMap,
+            NewReadyW = ReadyW,
             NewBusyMap = BusyWMap
     end,
-    get_result(NewBusyMap, NewResultMap).
-            % TODO 
+    get_result(NewReadyW, NewBusyMap, NewResultMap).
+            % TODO
 
 % Accept connection accepts requests from other sockets.
 accept_connection(CoordPid, AcceptSock) ->
     {Outcome, Sock} = gen_tcp:accept(AcceptSock),
-    if 
+    if
         Outcome == error -> 
             io:format("~nUnexpected error during socket accept~n"),
             io:format(Sock);
@@ -140,7 +172,6 @@ accept_connection(CoordPid, AcceptSock) ->
             spawn(?MODULE, coordinator_listener, [CoordPid, Sock])
     end,
     accept_connection(CoordPid, AcceptSock).
-    
 
 % Coordinator listener manages the communication with the worker
 % Waits to receive messages from the host and 
