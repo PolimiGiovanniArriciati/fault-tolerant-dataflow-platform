@@ -1,27 +1,43 @@
 -module('ds').
--export([c/0, c1/0, w/0, w1/0, c2w/0, c1w/0, worker/0, worker/2, coordinator_start/0, coordinator_start/1, accept_connection/2, coordinator_listener/2, coordinator/1, dispatch_work/1, get_result/3]).
+-export([c/0, c1/0, w/0, w1/0, c2w/0, c1w2/0, c1w/0, worker/0, worker/2, coordinator_start/0, coordinator_start/1, accept_connection/2, coordinator_listener/2, coordinator/1, dispatch_work/1, get_result/3]).
 -importlib([pr]).
 
+% DEBUG FUNCTIONS
+
+% Starts a coordinator listening on port 8080
 c() ->
     coordinator_start(8080).
 
+% Starts a coordinator listening on port 8081
 c1() ->
     coordinator_start(8081).
 
+% Starts a worker connecting to "127.0.0.1", 8080
 w() ->
     worker().
 
+% Starts a worker connecting to "127.0.0.1", 8081
 w1() -> 
     worker("127.0.0.1", 8081).
 
+% Starts a coordinator and a worker, ip: "127.0.0.1" port: 8080
 c1w() ->
     spawn(?MODULE, coordinator_start, [8080]),
     spawn(?MODULE, worker, []).
+
+% Starts a coordinator and two workers, ip: "127.0.0.1" port: 8080
 c2w() ->
     spawn(?MODULE, coordinator_start, [8080]),
     spawn(?MODULE, worker, []),
     spawn(?MODULE, worker, []).
 
+% Starts a coordinator and two workers, ip: "127.0.0.1" port: 8081
+c1w2() ->
+    spawn(?MODULE, coordinator_start, [8081]),
+    spawn(?MODULE, worker, ["127.0.0.1", 8081]),
+    spawn(?MODULE, worker, ["127.0.0.1", 8081]).
+
+% MAIN PROGRAM 
 
 % Starts coordinator with default harcoded port 8080
 coordinator_start() ->
@@ -85,22 +101,26 @@ coordinator(ReadyW) ->
 % Notify the sending process was unsuccessful and give a non send input to be
 % reschedule when the receive routine gets the result back?
 send_work(_, _ ,[], BusyWMap) ->
-    io:format("Send work empty"),
+    io:format("Send work empty ~n"),
     BusyWMap;
 
 
 send_work([ReadyW | RWList], Function, [Input | InList], BusyWMap) ->
     io:format("Send work full~n"),
-    %io:fwrite("Input: ~w~n", [Input|InList]),
-    %io:fwrite("Ready processes: ~w~n", [ReadyW | RWList]),
+    io:fwrite("~nInput: ~w~n", [Input]),
+    io:fwrite("~nRemaining input: ~w~n", [InList]),
+
+    io:fwrite("Ready process: ~w~n",  [ReadyW]),
     case gen_tcp:send(ReadyW, term_to_binary({work, Function, Input})) of 
         ok -> 
-            NewBWMap = send_work(RWList, Function, InList, BusyWMap),
-            NewBWMap = maps:put(ReadyW, Input, BusyWMap);
+            io:fwrite("Send successfully message "),
+            ReturnedBWMap = send_work(RWList, Function, InList, BusyWMap),
+            NewBWMap = maps:put(ReadyW, Input, ReturnedBWMap);
         % In this case an error has occured
         % TODO: it is possible to use a function to reunite the inputs
         %       and divide them again to respect of the others Ready workers
-        _ ->
+        Msg ->
+            io:fwrite("An error has occured sending the message ~w~n", Msg),
             NewBWMap = send_work(RWList, Function, [Input | InList], BusyWMap)
     end,
     NewBWMap.
@@ -111,7 +131,7 @@ divide_jobs([_ | []], InputList, _) ->
     [InputList];
 % Case more than one worker, create sublists
 divide_jobs([_ | ListReadyW], InputList, Size) ->
-        [lists:sublist(InputList, 1, Size) | divide_jobs(ListReadyW, lists:sublist(InputList, Size+1), Size)].
+        [lists:sublist(InputList, 1, Size) | divide_jobs(ListReadyW, lists:sublist(InputList, Size , 2*Size+1), Size)].
 
 % Sends the work to the ready workers and waits for the results
 dispatch_work(ReadyWorker) ->
@@ -124,6 +144,7 @@ dispatch_work(ReadyWorker) ->
     % Sends the work, with the input list subdivided by divide_jobs
     BusyWMap = send_work(ReadyWorker, {Op, Fun}, divide_jobs(ReadyWorker, InputList, ceil(lists:flatlength(InputList)/lists:flatlength(ReadyWorker))), EmptyMap),
     % Receives the ready workers for new work and the results from the get_result function 
+    io:fwrite("Waiting for results, busy map: ~w~n", [maps:to_list(BusyWMap)]),
     [NewReadyW, ResultMap] = get_result([], BusyWMap, EmptyMap, #{}),
     maps:values(ResultMap),
     io:format(maps:to_list(ResultMap)),
