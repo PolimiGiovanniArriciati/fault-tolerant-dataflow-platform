@@ -1,50 +1,12 @@
--module('ds').
--export([c/0, c1/0, w/0, w1/0, c2w/0, c1w2/0, c1w/0, worker/0, worker/2, coordinator_start/0, coordinator_start/1, accept_connection/2, coordinator_listener/2, coordinator/1, dispatch_work/1, get_result/3]).
--importlib([pr]).
+-module('coordinator').
+-export([start/0, start/1, accept_connection/2, coordinator_listener/2, coordinator/1, dispatch_work/1, get_result/3]).
+-importlib([file_processing, partition]).
 
-% DEBUG FUNCTIONS
-
-% Starts a coordinator listening on port 8080
-c() ->
-    coordinator_start(8080).
-
-% Starts a coordinator listening on port 8081
-c1() ->
-    coordinator_start(8081).
-
-% Starts a worker connecting to "127.0.0.1", 8080
-w() ->
-    worker().
-
-% Starts a worker connecting to "127.0.0.1", 8081
-w1() -> 
-    worker("127.0.0.1", 8081).
-
-% Starts a coordinator and a worker, ip: "127.0.0.1" port: 8080
-c1w() ->
-    spawn(?MODULE, coordinator_start, [8080]),
-    spawn(?MODULE, worker, []).
-
-% Starts a coordinator and two workers, ip: "127.0.0.1" port: 8080
-c2w() ->
-    spawn(?MODULE, coordinator_start, [8080]),
-    spawn(?MODULE, worker, []),
-    spawn(?MODULE, worker, []).
-
-% Starts a coordinator and two workers, ip: "127.0.0.1" port: 8081
-c1w2() ->
-    spawn(?MODULE, coordinator_start, [8081]),
-    spawn(?MODULE, worker, ["127.0.0.1", 8081]),
-    spawn(?MODULE, worker, ["127.0.0.1", 8081]).
-
-% MAIN PROGRAM 
-
-% Starts coordinator with default harcoded port 8080
-coordinator_start() ->
-    coordinator_start(8080).
+start() ->
+    start(8080).
 
 % Starts an accept socket with the given port 
-coordinator_start(Port) ->
+start(Port) ->
     case gen_tcp:listen(Port, [binary, {packet, 0}, {active, false}]) of
         {error, ErrorMessage} -> 
             io:format("Unexpected error launching the coordinator "),
@@ -71,7 +33,6 @@ coordinator(ReadyW) ->
         io:fwrite("~w~n",[length(NewReadyW)])
     end,
     if
-        % In case the ready processes are 0 or did not increased from the last request to start, waits for new 
         length(NewReadyW) == length(ReadyW) ->
             io:format("~nNo new workers have join~n"),
             coordinator(NewReadyW);
@@ -125,27 +86,16 @@ send_work([ReadyW | RWList], Function, [Input | InList], BusyWMap) ->
     end,
     NewBWMap.
 
-% Divide job splits the map into cardinality |ReadyWorker| lists of tuples
-% Final case, one worker left returns InputList
-divide_jobs([_ | []], InputList, _) ->
-    [InputList];
-% Case more than one worker, create sublists
-divide_jobs([_ | ListReadyW], InputList, Size) ->
-        [lists:sublist(InputList, 1, Size) | divide_jobs(ListReadyW, lists:sublist(InputList, Size , 2*Size+1), Size)].
-
 % Sends the work to the ready workers and waits for the results
-dispatch_work(ReadyWorker) ->
-    EmptyMap = #{},
+dispatch_work(Workers) ->
     % Gets the input from file_processing
     {ok, Op, Fun, _, InputList} = file_processing:get_input(),
-    io:fwrite("Length input lists: ~w~n",[lists:flatlength(InputList)]),
-    io:fwrite("Length worker lists: ~w~n",[lists:flatlength(ReadyWorker)]),
-    io:fwrite("Size per sublist: ~w~n",[ceil(lists:flatlength(InputList)/lists:flatlength(ReadyWorker))]),
-    % Sends the work, with the input list subdivided by divide_jobs
-    BusyWMap = send_work(ReadyWorker, {Op, Fun}, divide_jobs(ReadyWorker, InputList, ceil(lists:flatlength(InputList)/lists:flatlength(ReadyWorker))), EmptyMap),
+    Work_force = lists:flatlength(Workers),
+    Inputs = partition:partition(InputList, Work_force),
+    BusyWMap = send_work(Workers, {Op, Fun},  Inputs, #{}),
     % Receives the ready workers for new work and the results from the get_result function 
     io:fwrite("Waiting for results, busy map: ~w~n", [maps:to_list(BusyWMap)]),
-    [NewReadyW, ResultMap] = get_result([], BusyWMap, EmptyMap, #{}),
+    [NewReadyW, ResultMap] = get_result([], BusyWMap, #{}, #{}),
     maps:values(ResultMap),
     io:format(maps:to_list(ResultMap)),
     dispatch_work(NewReadyW).
@@ -206,12 +156,11 @@ get_result(ReadyW, BusyWMap, ResultsMap, SockOrderMap) ->
 
 % Accept connection accepts requests from other sockets.
 accept_connection(CoordPid, AcceptSock) ->
-    {Outcome, Sock} = gen_tcp:accept(AcceptSock),
-    if
-        Outcome == error -> 
+    case gen_tcp:accept(AcceptSock) of
+        {error, Error} ->
             io:format("~nUnexpected error during socket accept~n"),
-            io:format(Sock);
-        true ->
+            io:format(Error);
+        {ok, Sock} ->
             io:format("Coordinator accepted a new connection~n"),
             % Starts the specific worker Pid that waits to receive messages from the worker
             %coordinator_listener(CoordPid, Sock)
@@ -226,46 +175,14 @@ coordinator_listener(CoordinatorPid, Sock) ->
         {ok, Msg} ->
             case binary_to_term(Msg) of 
                 join -> 
+                    io:format("New worker has joined~n"),
                     CoordinatorPid ! {Sock, join};
                 {result, Result} ->
+                    io:format("Result received ~w~n", [Result]),
                     CoordinatorPid ! {Sock, result, Result}
-            end;
-        {error, _} ->
+            end,
+            coordinator_listener(CoordinatorPid, Sock);
+        {error, Error} ->
+            io:format("Error in coordinator listener ~w~n", [Error]),
             CoordinatorPid ! {Sock, error}
-            
-    end,
-    coordinator_listener(CoordinatorPid, Sock).
-
-% Worker uses worker function with default host, ip
-worker() ->
-    worker("127.0.0.1", 8080).
-
-% Worker starts a tcp connection to the coordinator
-% Worker function is for now just a stub to test the coordinator
-worker(Host, Port) ->
-    {Outcome, Sock} = gen_tcp:connect(Host, Port, [binary, {packet, 0}, {active, false}]),
-    if 
-        Outcome == error -> 
-            io:format("Unexpected error during socket accept~n"),
-            io:format(Sock);
-        Outcome == ok ->
-            ok = gen_tcp:send(Sock, term_to_binary(join)),
-            worker_routine(Sock)
     end.
-    
-% Worker routine, up to now just a stub to handle messaging with the coordinator
-worker_routine(Sock) ->
-    case gen_tcp:recv(Sock, 0) of
-        % TODO - the worker will receive messages and then do computation
-        % Receives the commands, then compute and sends results, then wait for new task
-        {ok, EncodedMsg} ->
-            {Type, {Operation, Function}, Input} = binary_to_term(EncodedMsg),
-            io:fwrite("Received: ~w~n", [{Type, {Operation, Function}, Input}]),
-            % DUMMY WORKER - just sends back the input it has received
-            io:fwrite("Sending the results ~w~n", [Input]),
-            ok = gen_tcp:send(Sock, term_to_binary({result, Input}));
-        {error, _} ->
-            io:format("An error has occured, shutting down the worker ~n"),
-            halt()
-    end,
-    worker_routine(Sock).

@@ -1,1 +1,1 @@
-erlc -o ebin -W0 src/ds.erl src/file_processing.erl src/functions.erl src/rpctest.erl 
+erlc -o ebin -W0 src/*.erl
