@@ -1,6 +1,6 @@
 -module(functions).
--export([map/3, prime_factor_decomposition/1]).
--compile([no_warn_unused_function, export_all]).
+-export([map/3, changeKey/3, reduce/3]).
+-compile({no_warn_unused_function}).
 
 map(Op, Args, List) ->
 	lists:map(fun({K, V}) ->
