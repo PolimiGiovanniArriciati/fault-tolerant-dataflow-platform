@@ -77,18 +77,18 @@ dispatch_work(Workers) ->
 % In this case, send_work what should do?
 % Notify the sending process was unsuccessful and give a non send input to be
 % reschedule when the receive routine gets the result back?
-send_work(_, _ ,[], BusyWMap) ->
+send_work([], _ ,[], BusyWMap) ->
     io:format("Send work empty ~n~n"),
     BusyWMap;
+
+send_work([], _, Input, BusyWMap) ->
+    {error, {no_ready_workers, Input}, BusyWMap};
 
 send_work([ReadyW | RWList], Function, [Input | InList], BusyWMap) ->
     case gen_tcp:send(ReadyW, term_to_binary({work, Function, Input})) of 
         ok -> 
             io:fwrite("Send successfully message~n"),
             send_work(RWList, Function, InList, maps:put(ReadyW, Input, BusyWMap));
-        % In this case an error has occured
-        % TODO: it is possible to use a function to reunite the inputs
-        %       and divide them again to respect of the others Ready workers
         {error, Error} ->
             io:fwrite("An error has occured sending the message: ~w~n", Error),
             send_work(RWList, Function, [Input | InList], BusyWMap)
@@ -104,9 +104,10 @@ get_result(ReadyW, {}, ResultMap) ->
 % Case no Ready workers (waits to receive at least a worker)
 get_result([], {}, Result, _) ->
     io:format("Waiting for new ready workers to join, since no work are scheduled and no ready workers are available ~n"),
-    receive 
+    receive
         {Sock, join} ->
             [[Sock], #{}]
+        %FIXME: Sock is ignored and lost
     end,
     Result;
 
@@ -144,7 +145,6 @@ get_result(ReadyW, BusyWMap, ResultsMap, SockOrderMap) ->
             NewBusyMap = BusyWMap
     end,
     get_result(NewReadyW, NewBusyMap, NewResultMap).
-            % TODO
 
 % Accept connection accepts requests from other sockets.
 accept_connection(CoordPid, AcceptSock) ->
@@ -166,6 +166,7 @@ coordinator_listener(CoordinatorPid, Sock) ->
     case gen_tcp:recv(Sock, 0) of
         {ok, Msg} ->
             case binary_to_term(Msg) of 
+                % TODO: maybe differenciate the cases of join and result, with different actors
                 join -> 
                     io:format("New worker has joined~n"),
                     CoordinatorPid ! {Sock, join};
