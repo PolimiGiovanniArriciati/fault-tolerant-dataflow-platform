@@ -48,6 +48,22 @@ coordinator(ReadyW) ->
             end
     end.
 
+% Sends the work to the ready workers and waits for the results
+dispatch_work(Workers) ->
+    % Gets the input from file_processing
+    {ok, Op, Fun, Args, InputList} = file_processing:get_input(),
+    Work_force = lists:flatlength(Workers),
+    Inputs = partition:partition(InputList, Work_force),
+    % TODO: add a Blocknumber to the input to be able to identify the block
+    % here should loop over the inputs and send the work to the workers
+    BusyWMap = send_work(Workers, {Op, Fun, Args},  Inputs, #{}),
+    % Receives the ready workers for new work and the results from the get_result function 
+    io:fwrite("Waiting for results, busy map: ~w~n", [maps:to_list(BusyWMap)]),
+    [NewReadyW, ResultMap] = get_result([], BusyWMap, #{}, #{}),
+    maps:values(ResultMap),
+    io:format(maps:to_list(ResultMap)),
+    dispatch_work(NewReadyW).
+
 % Send work takes the list of ready processes, the function to apply
 % and sends to all the ready processes, a lists of inputs (Input)
 % to be processed
@@ -77,20 +93,6 @@ send_work([ReadyW | RWList], Function, [Input | InList], BusyWMap) ->
             io:fwrite("An error has occured sending the message: ~w~n", Error),
             send_work(RWList, Function, [Input | InList], BusyWMap)
     end.
-
-% Sends the work to the ready workers and waits for the results
-dispatch_work(Workers) ->
-    % Gets the input from file_processing
-    {ok, Op, Fun, Args, InputList} = file_processing:get_input(),
-    Work_force = lists:flatlength(Workers),
-    Inputs = partition:partition(InputList, Work_force),
-    BusyWMap = send_work(Workers, {Op, Fun, Args},  Inputs, #{}),
-    % Receives the ready workers for new work and the results from the get_result function 
-    io:fwrite("Waiting for results, busy map: ~w~n", [maps:to_list(BusyWMap)]),
-    [NewReadyW, ResultMap] = get_result([], BusyWMap, #{}, #{}),
-    maps:values(ResultMap),
-    io:format(maps:to_list(ResultMap)),
-    dispatch_work(NewReadyW).
     
 % Get results, given the ReadyWorkers, BusyWorkerMap and the actual ResultMap, 
 % Returns in a list the updated ReadyWorkers and the updated ResultMap
