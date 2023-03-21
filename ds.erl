@@ -80,7 +80,7 @@ coordinator(ReadyW) ->
                 io:format(Control),    
                 if 
                     Control == ["y"] ->
-                        io:format("~n Starting the normal executuion ~n"),
+                        io:format("~n Starting the normal execution ~n"),
                         dispatch_work(NewReadyW);
                     true ->
                         coordinator(NewReadyW)
@@ -101,19 +101,19 @@ coordinator(ReadyW) ->
 % Notify the sending process was unsuccessful and give a non send input to be
 % reschedule when the receive routine gets the result back?
 send_work(_, _ ,[], BusyWMap) ->
-    io:format("Send work empty ~n"),
+    io:format("Send work empty ~n~n"),
     BusyWMap;
 
 
 send_work([ReadyW | RWList], Function, [Input | InList], BusyWMap) ->
     io:format("Send work full~n"),
-    io:fwrite("~nInput: ~w~n", [Input]),
-    io:fwrite("~nRemaining input: ~w~n", [InList]),
+    io:fwrite("Input: ~w~n", [Input]),
+    io:fwrite("Remaining input: ~w~n~n", [InList]),
 
     io:fwrite("Ready process: ~w~n",  [ReadyW]),
     case gen_tcp:send(ReadyW, term_to_binary({work, Function, Input})) of 
         ok -> 
-            io:fwrite("Send successfully message "),
+            io:fwrite("Send successfully message~n"),
             ReturnedBWMap = send_work(RWList, Function, InList, BusyWMap),
             NewBWMap = maps:put(ReadyW, Input, ReturnedBWMap);
         % In this case an error has occured
@@ -158,24 +158,26 @@ get_result(ReadyW, #{}, ResultMap) ->
     [ReadyW, ResultMap].
 
 % Case no Ready workers (waits to receive at least a worker)
-get_result([], #{}, _, _) ->
+get_result([], #{}, Result, _) ->
     receive 
         {Sock, join} ->
             [[Sock], #{}]
-    end;
+    end,
+    Result;
 
 % Normal case
 get_result(ReadyW, BusyWMap, ResultsMap, SockOrderMap) ->
     receive 
         {Sock, result, Result} ->
-            io:format(Result),
-            io:format(Sock),
+            io:fwrite("New results have arrived ~w ", [Result]),
+            io:fwrite("from socket ~w~n", [Sock]),
             #{Sock := Index} = SockOrderMap,
             NewResultMap = ResultsMap#{Index => Result},
             NewBusyMap = maps:remove(Sock, BusyWMap),
             NewReadyW = [Sock | ReadyW];
             % TODO
         {Sock, error} ->
+            io:fwrite("Error from socket ~w~n", [Sock]),
             NewBusyMap = maps:remove(Sock, BusyWMap),
             NewResultMap = ResultsMap,
             io:format(Sock),
@@ -187,12 +189,13 @@ get_result(ReadyW, BusyWMap, ResultsMap, SockOrderMap) ->
             ;
             % TODO
         {Sock, join} ->
+            io:fwrite("New process has join ~w~n", [Sock]),
             NewResultMap = ResultsMap,
             NewBusyMap = BusyWMap,
             NewReadyW = [Sock, ReadyW],
             io:format(Sock);
         _ ->
-            io:write("Unrecognized message"),
+            io:fwrite("Unrecognized message~n"),
             NewResultMap = ResultsMap,
             NewReadyW = ReadyW,
             NewBusyMap = BusyWMap
@@ -219,10 +222,16 @@ accept_connection(CoordPid, AcceptSock) ->
 % Waits to receive messages from the host and 
 coordinator_listener(CoordinatorPid, Sock) ->
     case gen_tcp:recv(Sock, 0) of
-        {ok, <<"join">>} ->
-            CoordinatorPid ! {Sock, join};
+        {ok, Msg} ->
+            case binary_to_term(Msg) of 
+                join -> 
+                    CoordinatorPid ! {Sock, join};
+                {result, Result} ->
+                    CoordinatorPid ! {Sock, result, Result}
+            end;
         {error, _} ->
-            CoordinatorPid ! {Sock, closed}
+            CoordinatorPid ! {Sock, error}
+            
     end,
     coordinator_listener(CoordinatorPid, Sock).
 
@@ -239,7 +248,7 @@ worker(Host, Port) ->
             io:format("Unexpected error during socket accept~n"),
             io:format(Sock);
         Outcome == ok ->
-            ok = gen_tcp:send(Sock, "join"),
+            ok = gen_tcp:send(Sock, term_to_binary(join)),
             worker_routine(Sock)
     end.
     
@@ -250,9 +259,12 @@ worker_routine(Sock) ->
         % Receives the commands, then compute and sends results, then wait for new task
         {ok, EncodedMsg} ->
             {Type, {Operation, Function}, Input} = binary_to_term(EncodedMsg),
-            io:fwrite("~w", [{Type, {Operation, Function}, Input}]);
-        {error, R} ->
+            io:fwrite("Received: ~w~n", [{Type, {Operation, Function}, Input}]),
+            % DUMMY WORKER - just sends back the input it has received
+            io:fwrite("Sending the results ~w~n", [Input]),
+            ok = gen_tcp:send(Sock, term_to_binary({result, Input}));
+        {error, _} ->
             io:format("An error has occured, shutting down the worker ~n"),
-            exit(R)
+            halt()
     end,
     worker_routine(Sock).
