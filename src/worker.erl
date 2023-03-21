@@ -19,11 +19,15 @@ start(Host, Port) ->
 worker_routine(Sock) ->
     case gen_tcp:recv(Sock, 0) of
         {ok, Msg} ->
-            {Type, {Operation, Function}, Data} = binary_to_term(Msg),
-            io:fwrite("Received: ~w~n", [{Type, {Operation, Function}, Data}]),
-            Data = erlang:apply(functions, Function, [Data]),
-            io:fwrite("Sending the results ~w~n", [Data]),
-            ok = gen_tcp:send(Sock, term_to_binary({result, Data}));
+            {work, {Operation, Function, Args}, Data} = binary_to_term(Msg),
+            Result = erlang:apply(functions, Operation, [Function, Args, Data]),
+             case gen_tcp:send(Sock, term_to_binary({result, Result})) of
+                ok ->
+                    worker_routine(Sock);
+                {error, Error} ->
+                    io:fwrite("Error: ~w,~n...shutting down the worker", [Error]),
+                    halt()
+            end;
         {error, Error} ->
             io:fwrite("Error: ~w,~n...shutting down the worker", [Error]),
             halt()

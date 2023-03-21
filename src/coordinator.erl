@@ -89,10 +89,10 @@ send_work([ReadyW | RWList], Function, [Input | InList], BusyWMap) ->
 % Sends the work to the ready workers and waits for the results
 dispatch_work(Workers) ->
     % Gets the input from file_processing
-    {ok, Op, Fun, _, InputList} = file_processing:get_input(),
+    {ok, Op, Fun, Args, InputList} = file_processing:get_input(),
     Work_force = lists:flatlength(Workers),
     Inputs = partition:partition(InputList, Work_force),
-    BusyWMap = send_work(Workers, {Op, Fun},  Inputs, #{}),
+    BusyWMap = send_work(Workers, {Op, Fun, Args},  Inputs, #{}),
     % Receives the ready workers for new work and the results from the get_result function 
     io:fwrite("Waiting for results, busy map: ~w~n", [maps:to_list(BusyWMap)]),
     [NewReadyW, ResultMap] = get_result([], BusyWMap, #{}, #{}),
@@ -131,8 +131,6 @@ get_result(ReadyW, BusyWMap, ResultsMap, SockOrderMap) ->
             io:fwrite("Error from socket ~w~n", [Sock]),
             NewBusyMap = maps:remove(Sock, BusyWMap),
             NewResultMap = ResultsMap,
-            io:format(Sock),
-            
             %TODO - reschedule the job
             NewReadyW = ReadyW
             %BusyWUpToNow = maps:remove(Sock, BusyWMap),
