@@ -1,4 +1,4 @@
--module(pr). %processing
+-module(file_processing). %processing
 -export([get_input/0, save_data/2]).
 -define(SPLIT(X), string:split(string:trim(X), " ", all)).
 

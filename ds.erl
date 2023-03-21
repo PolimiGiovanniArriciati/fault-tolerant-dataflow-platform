@@ -1,5 +1,5 @@
 -module('ds').
--export([c/0, c1/0, w/0, w1/0, worker/0, worker/2, coordinator_start/0, coordinator_start/1, accept_connection/2, coordinator_listener/2, coordinator/1, dispatch_work/1, get_result/3]).
+-export([c/0, c1/0, w/0, w1/0, c2w/0, c1w/0, worker/0, worker/2, coordinator_start/0, coordinator_start/1, accept_connection/2, coordinator_listener/2, coordinator/1, dispatch_work/1, get_result/3]).
 -importlib([pr]).
 
 c() ->
@@ -13,6 +13,15 @@ w() ->
 
 w1() -> 
     worker("127.0.0.1", 8081).
+
+c1w() ->
+    spawn(?MODULE, coordinator_start, [8080]),
+    spawn(?MODULE, worker, []).
+c2w() ->
+    spawn(?MODULE, coordinator_start, [8080]),
+    spawn(?MODULE, worker, []),
+    spawn(?MODULE, worker, []).
+
 
 % Starts coordinator with default harcoded port 8080
 coordinator_start() ->
@@ -39,41 +48,28 @@ coordinator(ReadyW) ->
         {NewWSock, join} -> 
             io:format("accepted a join ~n"),
             NewReadyW = [NewWSock | ReadyW]
-    % After 2500 ms of no new joins, checks the number of workers
-    after 2500 ->
+    % After 5000 ms of no new joins, prints the number of workers
+    after 5000 ->
         NewReadyW = ReadyW,
         io:format("~nReady processes: "),
-        io:fwrite("~w~n",[length(NewReadyW)]),
-        if 
-            length(NewReadyW) == length(ReadyW) ->
-                coordinator(ReadyW), 
-                halt();
-            true -> 
-                io:format("Coordinator - TODO")
-            end
+        io:fwrite("~w~n",[length(NewReadyW)])
     end,
-    {ok, Control} = io:fread("Coordinator ready, do you want to start executing the tasks in the input file? [y/n]", "~s"),
-    io:format(Control),    
-    if 
-        Control == ["y"] ->
-            io:format("~n Starting the normal executuion ~n"),
-            Pid = spawn(?MODULE, dispatch_work, [NewReadyW]),
-            coordinator_loop(Pid),
-            halt();
-        true ->
-            coordinator(NewReadyW),
-            halt()
+    if
+        % In case the ready processes are 0 or did not increased from the last request to start, waits for new 
+        length(NewReadyW) == length(ReadyW) ->
+            io:format("~nNo new workers have join~n"),
+            coordinator(NewReadyW);
+        true -> 
+                {ok, Control} = io:fread("Coordinator ready, do you want to start executing the tasks in the input file? [y/n]", "~s"),
+                io:format(Control),    
+                if 
+                    Control == ["y"] ->
+                        io:format("~n Starting the normal executuion ~n"),
+                        dispatch_work(NewReadyW);
+                    true ->
+                        coordinator(NewReadyW)
+            end
     end.
-
-coordinator_loop(Scheduler) ->
-    receive
-        {Socket, join} ->
-            Scheduler ! {Socket, join};
-        {Socket, error} ->
-            Scheduler ! {Socket, error}
-end,
-coordinator_loop(Scheduler).
-
 
 % Send work takes the list of ready processes, the function to apply
 % and sends to all the ready processes, a lists of inputs (Input)
@@ -92,9 +88,12 @@ send_work(_, _ ,[], BusyWMap) ->
     io:format("Send work empty"),
     BusyWMap;
 
+
 send_work([ReadyW | RWList], Function, [Input | InList], BusyWMap) ->
-    io:format("Send work full"),
-    case gen_tcp:send(ReadyW, {work, Function, Input}) of 
+    io:format("Send work full~n"),
+    io:fwrite("Input: ~w~n", [Input|InList]),
+    io:fwrite("Ready processes: ~w~n", [ReadyW | RWList]),
+    case gen_tcp:send(ReadyW, term_to_binary({work, Function, Input})) of 
         ok -> 
             NewBWMap = send_work(RWList, Function, InList, BusyWMap),
             NewBWMap = maps:put(ReadyW, Input, BusyWMap);
@@ -106,26 +105,39 @@ send_work([ReadyW | RWList], Function, [Input | InList], BusyWMap) ->
     end,
     NewBWMap.
 
-%dispatch_work(ReadyWorker, []) ->
-%%    io:format("Dispatcher - TODO"),
- %   % TODO the parameter will depend on the function and input data
-%    BusyWMap = send_work(ReadyWorker, [], [], #{}),
-%    dispatch_work(ReadyWorker, BusyWMap);
-%    % TODO dispach the work and read the csv file 
+% Divide job splits the map into cardinality |ReadyWorker| lists of tuples
+% Final case, one worker left returns InputList
+divide_jobs([_ | []], InputList, _) ->
+    [InputList];
+% Case more than one worker, create sublists
+divide_jobs([_ | ListReadyW], InputList, Size) ->
+        [[lists:sublist(InputList, 0, Size-1)] | divide_jobs(ListReadyW, lists:sublist(InputList, Size), Size)].
 
 % Sends the work to the ready workers and waits for the results
 dispatch_work(ReadyWorker) ->
     EmptyMap = #{},
-    BusyWMap = send_work(ReadyWorker, [], [], EmptyMap),
+    {ok, Op, Fun, _, InputList} = file_processing:get_input(),
+    BusyWMap = send_work(ReadyWorker, {Op, Fun}, divide_jobs(ReadyWorker, InputList, ceil(length(InputList)/length(ReadyWorker))), EmptyMap),
     [NewReadyW, ResultMap] = get_result([], BusyWMap, EmptyMap, #{}),
     maps:values(ResultMap),
-    io:format([ResultMap]),
+    io:format(maps:to_list(ResultMap)),
     dispatch_work(NewReadyW).
     
+% Get results, given the ReadyWorkers, BusyWorkerMap and the actual ResultMap, 
+% Returns in a list the updated ReadyWorkers and the updated ResultMap
 
+% Case no more result to wait
 get_result(ReadyW, #{}, ResultMap) ->
     [ReadyW, ResultMap].
 
+% Case no Ready workers (waits to receive at least a worker)
+get_result([], #{}, _, _) ->
+    receive 
+        {Sock, join} ->
+            [[Sock], #{}]
+    end;
+
+% Normal case
 get_result(ReadyW, BusyWMap, ResultsMap, SockOrderMap) ->
     receive 
         {Sock, result, Result} ->
@@ -182,7 +194,7 @@ coordinator_listener(CoordinatorPid, Sock) ->
     case gen_tcp:recv(Sock, 0) of
         {ok, <<"join">>} ->
             CoordinatorPid ! {Sock, join};
-        {error, <<"closed">>} ->
+        {error, _} ->
             CoordinatorPid ! {Sock, closed}
     end,
     coordinator_listener(CoordinatorPid, Sock).
@@ -192,6 +204,7 @@ worker() ->
     worker("127.0.0.1", 8080).
 
 % Worker starts a tcp connection to the coordinator
+% Worker function is for now just a stub to test the coordinator
 worker(Host, Port) ->
     {Outcome, Sock} = gen_tcp:connect(Host, Port, [binary, {packet, 0}, {active, false}]),
     if 
@@ -203,12 +216,14 @@ worker(Host, Port) ->
             worker_routine(Sock)
     end.
     
+% Worker routine, up to now just a stub to handle messaging with the coordinator
 worker_routine(Sock) ->
     case gen_tcp:recv(Sock, 0) of
         % TODO - the worker will receive messages and then do computation
         % Receives the commands, then compute and sends results, then wait for new task
-        {ok, <<"">>} ->
-            io:format("");
+        {ok, EncodedMsg} ->
+            {Type, {Operation, Function}, Input} = binary_to_term(EncodedMsg),
+            io:fwrite("~w", [{Type, {Operation, Function}, Input}]);
         {error, R} ->
             io:format("An error has occured, shutting down the worker ~n"),
             exit(R)
