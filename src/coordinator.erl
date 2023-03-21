@@ -65,26 +65,18 @@ send_work(_, _ ,[], BusyWMap) ->
     io:format("Send work empty ~n~n"),
     BusyWMap;
 
-
 send_work([ReadyW | RWList], Function, [Input | InList], BusyWMap) ->
-    io:format("Send work full~n"),
-    io:fwrite("Input: ~w~n", [Input]),
-    io:fwrite("Remaining input: ~w~n~n", [InList]),
-
-    io:fwrite("Ready process: ~w~n",  [ReadyW]),
     case gen_tcp:send(ReadyW, term_to_binary({work, Function, Input})) of 
         ok -> 
             io:fwrite("Send successfully message~n"),
-            ReturnedBWMap = send_work(RWList, Function, InList, BusyWMap),
-            NewBWMap = maps:put(ReadyW, Input, ReturnedBWMap);
+            send_work(RWList, Function, InList, maps:put(ReadyW, Input, BusyWMap));
         % In this case an error has occured
         % TODO: it is possible to use a function to reunite the inputs
         %       and divide them again to respect of the others Ready workers
-        Msg ->
-            io:fwrite("An error has occured sending the message ~w~n", Msg),
-            NewBWMap = send_work(RWList, Function, [Input | InList], BusyWMap)
-    end,
-    NewBWMap.
+        {error, Error} ->
+            io:fwrite("An error has occured sending the message: ~w~n", Error),
+            send_work(RWList, Function, [Input | InList], BusyWMap)
+    end.
 
 % Sends the work to the ready workers and waits for the results
 dispatch_work(Workers) ->
