@@ -91,8 +91,8 @@ send_work(_, _ ,[], BusyWMap) ->
 
 send_work([ReadyW | RWList], Function, [Input | InList], BusyWMap) ->
     io:format("Send work full~n"),
-    io:fwrite("Input: ~w~n", [Input|InList]),
-    io:fwrite("Ready processes: ~w~n", [ReadyW | RWList]),
+    %io:fwrite("Input: ~w~n", [Input|InList]),
+    %io:fwrite("Ready processes: ~w~n", [ReadyW | RWList]),
     case gen_tcp:send(ReadyW, term_to_binary({work, Function, Input})) of 
         ok -> 
             NewBWMap = send_work(RWList, Function, InList, BusyWMap),
@@ -111,13 +111,19 @@ divide_jobs([_ | []], InputList, _) ->
     [InputList];
 % Case more than one worker, create sublists
 divide_jobs([_ | ListReadyW], InputList, Size) ->
-        [[lists:sublist(InputList, 0, Size-1)] | divide_jobs(ListReadyW, lists:sublist(InputList, Size), Size)].
+        [lists:sublist(InputList, 1, Size) | divide_jobs(ListReadyW, lists:sublist(InputList, Size+1), Size)].
 
 % Sends the work to the ready workers and waits for the results
 dispatch_work(ReadyWorker) ->
     EmptyMap = #{},
+    % Gets the input from file_processing
     {ok, Op, Fun, _, InputList} = file_processing:get_input(),
-    BusyWMap = send_work(ReadyWorker, {Op, Fun}, divide_jobs(ReadyWorker, InputList, ceil(length(InputList)/length(ReadyWorker))), EmptyMap),
+    io:fwrite("Length input lists: ~w~n",[lists:flatlength(InputList)]),
+    io:fwrite("Length worker lists: ~w~n",[lists:flatlength(ReadyWorker)]),
+    io:fwrite("Size per sublist: ~w~n",[ceil(lists:flatlength(InputList)/lists:flatlength(ReadyWorker))]),
+    % Sends the work, with the input list subdivided by divide_jobs
+    BusyWMap = send_work(ReadyWorker, {Op, Fun}, divide_jobs(ReadyWorker, InputList, ceil(lists:flatlength(InputList)/lists:flatlength(ReadyWorker))), EmptyMap),
+    % Receives the ready workers for new work and the results from the get_result function 
     [NewReadyW, ResultMap] = get_result([], BusyWMap, EmptyMap, #{}),
     maps:values(ResultMap),
     io:format(maps:to_list(ResultMap)),
