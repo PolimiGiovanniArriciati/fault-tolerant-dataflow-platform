@@ -154,11 +154,12 @@ dispatch_work(ReadyWorker) ->
 % Returns in a list the updated ReadyWorkers and the updated ResultMap
 
 % Case no more result to wait
-get_result(ReadyW, #{}, ResultMap) ->
+get_result(ReadyW, {}, ResultMap) ->
     [ReadyW, ResultMap].
 
 % Case no Ready workers (waits to receive at least a worker)
-get_result([], #{}, Result, _) ->
+get_result([], {}, Result, _) ->
+    io:format("Waiting for new ready workers to join, since no work are scheduled and no ready workers are available ~n"),
     receive 
         {Sock, join} ->
             [[Sock], #{}]
