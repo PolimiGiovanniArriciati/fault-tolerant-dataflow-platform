@@ -1,5 +1,5 @@
 -module('coordinator').
--export([start/0, start/1, accept_connection/2, coordinator_listener/2, coordinator/1, dispatch_work/1, get_result/3]).
+-export([start/0, start/1, accept_connection/3, coordinator/2, dispatch_work/1, get_result/3, socket_listener/2]).
 -importlib([file_processing, partition]).
 
 start() ->
@@ -8,24 +8,39 @@ start() ->
 % Starts an accept socket with the given port 
 start(Port) ->
     case gen_tcp:listen(Port, [binary, {packet, 0}, {active, false}]) of
-        {error, ErrorMessage} -> 
-            io:format("Unexpected error launching the coordinator "),
-            io:format(ErrorMessage);
         {ok, AcceptSock} -> 
             io:format("AcceptSocket generated, ready to listen for new workers~n"),
             % accepts incoming connections from the workers
-            Pid = spawn(?MODULE, coordinator, [[]]),
-            accept_connection(Pid, AcceptSock)
+            Coordinator_id = spawn(?MODULE, coordinator, [[],[]]),
+            accept_connection(Coordinator_id, AcceptSock, []);
+        {error, ErrorMessage} -> 
+            io:format("Unexpected error launching the coordinator~n"),
+            io:format(ErrorMessage)
+    end.
+
+% Accept connection accepts requests from other sockets.
+accept_connection(Coordinator_id, AcceptSock, Workers) ->
+    case gen_tcp:accept(AcceptSock) of
+        {error, Error} ->
+            io:format("~nUnexpected error during socket accept~n"),
+            io:format(Error),
+            accept_connection(Coordinator_id, AcceptSock, Workers);
+        {ok, Sock} ->
+            io:format("Coordinator accepted a new connection~n"),
+            % Starts the specific worker Pid that waits to receive messages from the worker
+            Worker = spawn(?MODULE, socket_listener, [Coordinator_id, Sock]),
+            accept_connection(Coordinator_id, AcceptSock, Workers ++ [Worker])
     end.
 
 % Coordinator has parameter R : ready workers (a list) and B: busy
-coordinator(ReadyW) ->
+coordinator(ReadyW, W) ->
     io:format("Coordinator waiting for workers"),
     receive
         % Receives the socket of a new joining worker
         {NewWSock, join} -> 
             io:format("accepted a join ~n"),
             NewReadyW = [NewWSock | ReadyW]
+        % FIXME: Why do we need this part?, can be a problem in case a worker is stuck 
     % After 5000 ms of no new joins, prints the number of workers
     after 5000 ->
         NewReadyW = ReadyW,
@@ -35,26 +50,27 @@ coordinator(ReadyW) ->
     if
         length(NewReadyW) == length(ReadyW) ->
             io:format("~nNo new workers have join~n"),
-            coordinator(NewReadyW);
-        true -> 
-                {ok, Control} = io:fread("Coordinator ready, do you want to start executing the tasks in the input file? [y/n]", "~s"),
-                io:format(Control),    
-                if 
-                    Control == ["y"] ->
-                        io:format("~n Starting the normal execution ~n"),
-                        dispatch_work(NewReadyW);
-                    true ->
-                        coordinator(NewReadyW)
+            coordinator(NewReadyW, W);
+        true -> % else 
+            io:write("Coordinator ready, do you want to start executing the tasks in the input file? [y/n]", "~s"),
+            case io:fread() of
+                {ok, ["y"]} ->
+                    % dispatch_work(NewReadyW),
+                    Work = spawn(?MODULE, dispatch_work, [NewReadyW]),
+                    coordinator(NewReadyW, W ++ [Work]);
+                {ok, ["n"]} ->
+                    io:format("Coordinator waiting for workers"),
+                    coordinator(NewReadyW, W)
             end
     end.
 
 % Sends the work to the ready workers and waits for the results
 dispatch_work(Workers) ->
-    % Gets the input from file_processing
     {ok, Op, Fun, Args, InputList} = file_processing:get_input(),
     Work_force = lists:flatlength(Workers),
     Inputs = partition:partition(InputList, Work_force),
     % TODO: add a Blocknumber to the input to be able to identify the block
+    InputsMap = map:from_list(lists:zip(Inputs, lists:seq(1, Work_force))),
     % here should loop over the inputs and send the work to the workers
     BusyWMap = send_work(Workers, {Op, Fun, Args},  Inputs, #{}),
     % Receives the ready workers for new work and the results from the get_result function 
@@ -146,23 +162,9 @@ get_result(ReadyW, BusyWMap, ResultsMap, SockOrderMap) ->
     end,
     get_result(NewReadyW, NewBusyMap, NewResultMap).
 
-% Accept connection accepts requests from other sockets.
-accept_connection(CoordPid, AcceptSock) ->
-    case gen_tcp:accept(AcceptSock) of
-        {error, Error} ->
-            io:format("~nUnexpected error during socket accept~n"),
-            io:format(Error);
-        {ok, Sock} ->
-            io:format("Coordinator accepted a new connection~n"),
-            % Starts the specific worker Pid that waits to receive messages from the worker
-            %coordinator_listener(CoordPid, Sock)
-            spawn(?MODULE, coordinator_listener, [CoordPid, Sock])
-    end,
-    accept_connection(CoordPid, AcceptSock).
-
 % Coordinator listener manages the communication with the worker
 % Waits to receive messages from the host and 
-coordinator_listener(CoordinatorPid, Sock) ->
+socket_listener(CoordinatorPid, Sock) ->
     case gen_tcp:recv(Sock, 0) of
         {ok, Msg} ->
             case binary_to_term(Msg) of 
@@ -174,7 +176,7 @@ coordinator_listener(CoordinatorPid, Sock) ->
                     io:format("Result received ~w~n", [Result]),
                     CoordinatorPid ! {Sock, result, Result}
             end,
-            coordinator_listener(CoordinatorPid, Sock);
+            socket_listener(CoordinatorPid, Sock);
         {error, Error} ->
             io:format("Error in coordinator listener ~w~n", [Error]),
             CoordinatorPid ! {Sock, error}
