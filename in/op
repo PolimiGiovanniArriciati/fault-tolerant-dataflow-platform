@@ -1,0 +1,4 @@
+partitions = 100
+map sub 1
+map add 2
+change_key mult 3

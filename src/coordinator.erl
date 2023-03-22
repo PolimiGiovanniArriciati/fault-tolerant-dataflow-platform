@@ -5,7 +5,7 @@
 start() ->
     start(8080).
 
-% Starts an accept socket with the given port 
+% Starts an accept socket with the given port
 start(Port) ->
     case gen_tcp:listen(Port, [binary, {packet, 0}, {active, false}]) of
         {ok, AcceptSock} -> 
