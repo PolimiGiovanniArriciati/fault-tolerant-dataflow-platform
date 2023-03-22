@@ -1,5 +1,5 @@
 -module('coordinator').
--export([start/0, start/1, accept_connection/3, coordinator/2, dispatch_work/1, get_result/3, socket_listener/2]).
+-export([start/0, start/1, accept_connection/3, coordinator/1, dispatch_work/1, get_result/3, socket_listener/2]).
 -importlib([file_processing, partition]).
 
 start() ->
@@ -33,7 +33,7 @@ accept_connection(Coordinator_id, AcceptSock, Workers) ->
     end.
 
 % Coordinator has parameter R : ready workers (a list) and B: busy
-coordinator(ReadyW, W) ->
+coordinator(ReadyW) ->
     io:format("Coordinator waiting for workers"),
     receive
         % Receives the socket of a new joining worker
@@ -49,19 +49,15 @@ coordinator(ReadyW, W) ->
     end,
     if
         length(NewReadyW) == length(ReadyW) ->
-            io:format("~nNo new workers have join~n"),
-            coordinator(NewReadyW, W);
+            io:format("~nNo new workers have join~n");
         true -> % else 
             io:write("Coordinator ready, do you want to start executing the tasks in the input file? [y/n]", "~s"),
             case io:fread() of
                 {ok, ["y"]} ->
                     % dispatch_work(NewReadyW),
-                    Work = spawn(?MODULE, dispatch_work, [NewReadyW]),
-                    coordinator(NewReadyW, W ++ [Work]);
-                {ok, ["n"]} ->
-                    io:format("Coordinator waiting for workers"),
-                    coordinator(NewReadyW, W)
-            end
+                    spawn(?MODULE, dispatch_work, [NewReadyW])
+            end,
+            coordinator(NewReadyW)
     end.
 
 % Sends the work to the ready workers and waits for the results
@@ -69,10 +65,13 @@ dispatch_work(Workers) ->
     {ok, Op, Fun, Args, InputList} = file_processing:get_input(),
     Work_force = lists:flatlength(Workers),
     Inputs = partition:partition(InputList, Work_force),
+    
     % TODO: add a Blocknumber to the input to be able to identify the block
-    InputsMap = map:from_list(lists:zip(Inputs, lists:seq(1, Work_force))),
+    InputsMap = map:from_list(lists:zip(lists:seq(1, Work_force), Inputs)),
+
     % here should loop over the inputs and send the work to the workers
-    BusyWMap = send_work(Workers, {Op, Fun, Args},  Inputs, #{}),
+    BusyWMap = send_work(Workers, {Op, Fun, Args},  InputsMap, #{}),
+
     % Receives the ready workers for new work and the results from the get_result function 
     io:fwrite("Waiting for results, busy map: ~w~n", [maps:to_list(BusyWMap)]),
     [NewReadyW, ResultMap] = get_result([], BusyWMap, #{}, #{}),

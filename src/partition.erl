@@ -8,7 +8,9 @@ partition(L, N) ->
     parthelp(L, N, 1, Chunk, End, []).
 
 parthelp(L, 1, P, _, E, Res) ->
-    Res ++ [lists:sublist(L, P, E)];
+    PartitionedList = Res ++ [lists:sublist(L, P, E)],
+    map:from_list(lists:zip(lists:seq(1, length(PartitionedList)), PartitionedList));
+
 
 parthelp(L, N, P, C, E, Res) ->
     R = lists:sublist(L, P, C),
