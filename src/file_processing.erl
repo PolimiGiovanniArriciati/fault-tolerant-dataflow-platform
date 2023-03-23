@@ -26,7 +26,6 @@ read_op(File, Ops, eof) ->
 
 split_operations(Operation) ->
 	[Op, Fun | Arg] = ?SPLIT(Operation),
-	io:format("DEBUGGING: ~p, ~p, ~p~n", [Op, Fun, Arg]),
 	{erlang:list_to_atom(Op),
 	 erlang:list_to_atom(Fun),
 	 case string:to_integer(Arg) of

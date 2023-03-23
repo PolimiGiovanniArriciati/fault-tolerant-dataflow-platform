@@ -58,12 +58,11 @@ coordinator(Workers, JobsInProgress) ->
             coordinator(Workers1, [])
     end.
 
-% Sends the work to the ready workers and waits for the results
 dispatch_work(Workers) ->
-    {ok, Npartitions, Ops} = file_processing:get_operations("in/op"), %FIXME?NAME),
-    {ok, InputList}        = file_processing:get_data("in/data"),     %?NAME),
+    {ok, Npartitions, Ops} = file_processing:get_operations("in/op"), %FIXME:?NAME),
+    {ok, InputList}        = file_processing:get_data("in/data"),     %FIXME:?NAME),
     Inputs = partition:partition(InputList, Npartitions),
-    [spawn(?MODULE, dispatch_work, [Ops, In, self()]) || In <- lists:zip(lists:seq(1, Npartitions), Inputs)],
+    [spawn(?MODULE, dispatch_work, [Ops, Data, self()]) || Data <- lists:zip(lists:seq(1, Npartitions), Inputs)],
     % TODO: collector for reduce operations
     ResultCollectorPid = spawn(?MODULE, get_results, [self(), #{}, Npartitions]),
     jobs_queue(Workers, [], ResultCollectorPid).
@@ -71,40 +70,60 @@ dispatch_work(Workers) ->
 dispatch_work([], Output, CoordinatorPid) ->
     CoordinatorPid ! {done, Output};
 
+dispatch_work([{Op, Function, Arg} | Ops], {PartitionNumber, Data}, QueuePid)
+    when Op =:= reduce ->
+    io:format("__LOG__ Dispatching work to the queue~n~s", [io_lib:format("~p", [Op])]),
+    % NO! QueuePid ! {job, {self(), {Op, Function, Arg}, Data}},
+    QueuePid ! {reduce_prep, self(), Data},
+    receive
+        {reduce, Op, []} -> ok;
+        {reduce, Op, ResultToReduce} ->
+            QueuePid ! {job, {self(), {Op, Function, Arg}, ResultToReduce}},
+            receive
+                {result, ResultToReduce} ->
+                    QueuePid ! {reduce, Op, ResultToReduce};
+                {error, Error} ->
+                    io:format("Error in coordinator listener ~w~n", [Error]),
+                    dispatch_work([{Op, Function, Arg} | Ops], {PartitionNumber, Data}, QueuePid)
+            after 3000 ->
+                self() ! {error, "Timeout in coordinator listener"}
+            end
+    end;
+
 dispatch_work([Op | Ops], {PartitionNumber, Data}, QueuePid) ->
-    io:format("Dispatching work to the queue~n~s", [io_lib:format("~p", [Op])]),
-    case Op of
-        {reduce, _} -> ok;
-            %TODO
-        _ ->
-        QueuePid ! {job, {self(), Op, Data}},
-        receive
-            {result, Result} ->
-                dispatch_work(Ops, {PartitionNumber, Result}, QueuePid);
-            {error, Error} ->
-                io:format("Error in coordinator listener ~w~n", [Error]),
-                dispatch_work([Op | Ops], {PartitionNumber, Data}, QueuePid)
-        after 3000 ->
-            self() ! {error, "Timeout in coordinator listener"}
-        end
+    io:format("__LOG__ Dispatching work to the queue~n~s", [io_lib:format("~p", [Op])]),
+    QueuePid ! {job, {self(), Op, Data}},
+    receive
+        {result, Result} ->
+            dispatch_work(Ops, {PartitionNumber, Result}, QueuePid);
+        {error, Error} ->
+            io:format("Error in coordinator listener ~w~n", [Error]),
+            dispatch_work([Op | Ops], {PartitionNumber, Data}, QueuePid)
+    after 3000 ->
+        self() ! {error, "Timeout in coordinator listener"}
     end.
 
 get_results(CoordinatorPid, OutputMap, 0) ->
     Output = lists:flatmap(fun({_, V}) -> V end, maps:to_list(OutputMap)),
+    io:format("__LOG__ All results received, sending to the coordinator~n"),
+    io:format("__LOG__ Output: ~w~n", [Output]),
     CoordinatorPid ! {done, Output};
 
 get_results(CoordinatorPid, OutputMap, N) ->
     receive
         {result, {PartitionNumber, Output}} ->
-            get_results(CoordinatorPid, maps:put(PartitionNumber, Output, OutputMap), N-1)
+            OutputMap1 = maps:put(PartitionNumber, Output, OutputMap),
+            io:format("__LOG__ Received result from partition ~w~n", [PartitionNumber]),
+            io:format("__LOG__ OutputMap: ~w~n", [OutputMap1]),
+            get_results(CoordinatorPid, OutputMap1, N-1)
     end.
 
 jobs_queue(Workers, DispatcherJobs, ResultCollectorPid)
     when Workers =/= [] andalso DispatcherJobs =/= [] ->
-            [Job | Jobs] = DispatcherJobs,
-            [Worker | Ls] = Workers,
-            gen_tcp:send(Worker, term_to_binary({job, Job})),
-            jobs_queue(Ls, Jobs, ResultCollectorPid);
+        [Job | Jobs] = DispatcherJobs,
+        [Worker | Ls] = Workers,
+        gen_tcp:send(Worker, term_to_binary({job, Job})),
+        jobs_queue(Ls, Jobs, ResultCollectorPid);
 
 jobs_queue(Workers, DispatcherJobs, ResultCollectorPid) ->
     receive
@@ -112,9 +131,29 @@ jobs_queue(Workers, DispatcherJobs, ResultCollectorPid) ->
             jobs_queue(Workers, DispatcherJobs ++ [Job1], ResultCollectorPid); %appends the job
         {join, NewWorker} ->
             jobs_queue([NewWorker | Workers], DispatcherJobs, ResultCollectorPid);
-        {reduce, _} ->
-            %TODO
-            ok;
+        {reduce_prep, Data, Pid} ->
+            %TODO:
+            % Flatten list of the partitions, then the flat list 
+            % Is used by the fold to create a list of {key, inputlist}
+            % The list can then be
+            NewFlatList = lists:flatten(Data),
+            MapReduce = lists:foldl(fun({K, V}, Acc) ->
+                            case maps:find(K,Acc) of
+                                {ok, List} ->
+                                    maps:put(K, [V | List]),
+                                error ->
+                                    maps:put(K, [V])
+                            end
+                        end,
+                        #{}, % Map is more efficient, Turing, 1950 CIRCA.
+                        NewFlatList),
+            
+            apply(reduce, Op, [Data]),
+            ResultCollectorPid ! {reduce, Data},
+            jobs_queue(Workers, DispatcherJobs, ResultCollectorPid),
+        {reduce_done, Ops, Data} ->
+            Input = partition:reduce(Data, ?N),
+            [spawn(?MODULE, dispatch_work, [Ops, In, self()]) || In <- Input];
         {done, Output} ->
             ResultCollectorPid ! {result, Output};
         {result, Output} ->

@@ -14,8 +14,21 @@ changeKey(Op, Arg, List) ->
 				end,
 				List).
 
+-spec reduce(Op, Args, List) -> Map when
+	Op ::  fun((Int, Int, Map) -> Map),
+	Args :: list(Int),
+	List :: list(Int),
+	Map :: map().
+
 reduce(Op, _, List) ->
-	lists:foldl(fun({K, V}, Acc) -> apply(?MODULE, Op, [K, V, Acc]) end, [], List).
+	lists:foldl(fun({K, V}, Map) ->
+					case maps:find(K, Map) of
+						{ok, Acc} ->
+							maps:put(K, apply(?MODULE, Op, [V, Acc]), Map);
+						error ->
+							maps:put(K, V, Map)
+					end
+				end, #{}, List).
 
 add(X, Y) ->
 		X + Y.
