@@ -68,63 +68,65 @@ dispatch_work(Workers) ->
     ResultCollectorPid = spawn(?MODULE, get_results, [self(), #{}, Npartitions]),
     jobs_queue(Workers, [], ResultCollectorPid).
 
-dispatch_work([], Out, CoordinatorPid) ->
-    CoordinatorPid ! {done, Out};
+dispatch_work([], Output, CoordinatorPid) ->
+    CoordinatorPid ! {done, Output};
 
-dispatch_work([Op | Ops], In, QueuePid) ->
+dispatch_work([Op | Ops], {PartitionNumber, Data}, QueuePid) ->
     io:format("Dispatching work to the queue~n~s", [io_lib:format("~p", [Op])]),
     case Op of
         {reduce, _} -> ok;
             %TODO
         _ ->
-        QueuePid ! {job, {self(), Op, In}},
+        QueuePid ! {job, {self(), Op, Data}},
         receive
             {result, Result} ->
-                dispatch_work(Ops, Result, QueuePid);
+                dispatch_work(Ops, {PartitionNumber, Result}, QueuePid);
             {error, Error} ->
                 io:format("Error in coordinator listener ~w~n", [Error]),
-                dispatch_work([Op | Ops], In, QueuePid)
+                dispatch_work([Op | Ops], {PartitionNumber, Data}, QueuePid)
         after 3000 ->
             self() ! {error, "Timeout in coordinator listener"}
         end
     end.
 
-get_results(CoordinatorPid, OutMap, 0) ->
-    Output = lists:flatmap(fun({_, V}) -> V end, maps:to_list(OutMap)),
+get_results(CoordinatorPid, OutputMap, 0) ->
+    Output = lists:flatmap(fun({_, V}) -> V end, maps:to_list(OutputMap)),
     CoordinatorPid ! {done, Output};
 
-get_results(CoordinatorPid, OutMap, N) ->
+get_results(CoordinatorPid, OutputMap, N) ->
     receive
-        {result, {OutId, Output}} ->
-            get_results(CoordinatorPid, maps:put(OutId, Output, OutMap), N-1)
+        {result, {PartitionNumber, Output}} ->
+            get_results(CoordinatorPid, maps:put(PartitionNumber, Output, OutputMap), N-1)
     end.
 
-% Coordinator manages the workers queue, assigning jobs to the workers
-jobs_queue([Worker | Ls], DispatcherJobs, ResultCollectorPid) ->
-    if
-        Worker =/= [] andalso DispatcherJobs =/= [] ->
+jobs_queue(Workers, DispatcherJobs, ResultCollectorPid)
+    when Workers =/= [] andalso DispatcherJobs =/= [] ->
             [Job | Jobs] = DispatcherJobs,
+            [Worker | Ls] = Workers,
             gen_tcp:send(Worker, term_to_binary({job, Job})),
             jobs_queue(Ls, Jobs, ResultCollectorPid);
-        true ->
-            receive
-                {job, Job1} ->
-                    jobs_queue([Worker | Ls], DispatcherJobs ++ [Job1], ResultCollectorPid);
-                {join, NewWorker} ->
-                    jobs_queue([NewWorker, Worker | Ls], DispatcherJobs, ResultCollectorPid);
-                {done, NewWorker} ->
-                    jobs_queue([NewWorker, Worker | Ls], DispatcherJobs, ResultCollectorPid);
-                {result, Output} ->
-                    file_processing:save_data("out/data", Output);
-                {error, CrushedWorker, Error} ->
-                    io:format("Error in coordinator listener ~w~n", [Error]),
-                    Workers = lists:delete(CrushedWorker, [Worker | Ls]),
-                    jobs_queue(Workers, DispatcherJobs, ResultCollectorPid);
-                Error ->
-                    io:format("Error in coordinator listener, unexpected message:~n~w~n", [Error]),
-                    jobs_queue([Worker | Ls], DispatcherJobs, ResultCollectorPid)
-            end
-        end.
+
+jobs_queue(Workers, DispatcherJobs, ResultCollectorPid) ->
+    receive
+        {job, Job1} ->
+            jobs_queue(Workers, DispatcherJobs ++ [Job1], ResultCollectorPid); %appends the job
+        {join, NewWorker} ->
+            jobs_queue([NewWorker | Workers], DispatcherJobs, ResultCollectorPid);
+        {reduce, _} ->
+            %TODO
+            ok;
+        {done, Output} ->
+            ResultCollectorPid ! {result, Output};
+        {result, Output} ->
+            file_processing:save_data("out/data", Output);
+        {error, CrushedWorker, Error} ->
+            io:format("Error in coordinator listener ~w~n", [Error]),
+            Workers1 = lists:delete(CrushedWorker, Workers),
+            jobs_queue(Workers1, DispatcherJobs, ResultCollectorPid);
+        Error ->
+            io:format("Error in coordinator listener, unexpected message:~n~w~n", [Error]),
+            jobs_queue(Workers, DispatcherJobs, ResultCollectorPid)
+    end.
 
 % Coordinator listener manages the communication with the worker
 % Waits to receive messages from the host and 
@@ -137,7 +139,7 @@ socket_listener(CoordinatorPid, Sock) ->
                     CoordinatorPid ! {join, Sock};
                 {result, DispatcherId, Result} ->
                     DispatcherId ! {result, Result},
-                    CoordinatorPid ! {done, Sock};
+                    CoordinatorPid ! {join, Sock};
                     % Updates the coordinator about the worker that has finished the job
                 Error ->
                     io:format("Error in socket listener, unexpected message:~n~w~n", [Error]),

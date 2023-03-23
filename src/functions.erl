@@ -2,24 +2,17 @@
 -export([map/3, changeKey/3, reduce/3, add/2, subtract/2, multiply/2, divide/2, power/2, sqrt/1, sum/3, prime_factor_decomposition/1]).
 -compile({no_warn_unused_function}).
 
-map(Op, Args, List) ->
+map(Op, Arg, List) ->
 	lists:map(fun({K, V}) ->
-								{K,
-								 case Args of
-									[] ->  	    apply(?MODULE, Op, [V]);
-									[X] ->      apply(?MODULE, Op, [V , X]);
-									[X | Xs] -> apply(?MODULE, Op, [V , X]),
-												apply(?MODULE, map, [Op, Xs, [{K, V}]])
-												end}
-						end,
-						List).
+					{K, apply(?MODULE, Op, [V, Arg])}
+				end,
+				List).
 
-changeKey(Op, Args, List) ->
+changeKey(Op, Arg, List) ->
 	lists:map(fun({K, V}) ->
-								{apply(?MODULE, Op, [Args, K]),
-								 V}
-						end,
-						List).
+					{apply(?MODULE, Op, [K, Arg]), V}
+				end,
+				List).
 
 reduce(Op, _, List) ->
 	lists:foldl(fun({K, V}, Acc) -> apply(?MODULE, Op, [K, V, Acc]) end, [], List).

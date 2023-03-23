@@ -1,4 +1,5 @@
 partitions = 1
-map sub 1
-map add 2
-change_key mult 3
+map subtract 10
+map add 22
+map multiply 100
+changeKey multiply 300

@@ -17,18 +17,21 @@ read_op(File) ->
 		read_op(File, [], file:read_line(File))}.
 
 read_op(File, Ops, {ok, Line}) ->
-	{Op, Fun, Args} = split_operations(Line),
-	read_op(File, [{Op, Fun, Args} | Ops], file:read_line(File));
+	{Op, Fun, Arg} = split_operations(Line),
+	read_op(File, [{Op, Fun, Arg} | Ops], file:read_line(File));
 
 read_op(File, Ops, eof) ->
 	file:close(File),
 	lists:reverse(Ops).
 
 split_operations(Operation) ->
-	[Op, Fun | Args] = ?SPLIT(Operation),
+	[Op, Fun | Arg] = ?SPLIT(Operation),
+	io:format("DEBUGGING: ~p, ~p, ~p~n", [Op, Fun, Arg]),
 	{erlang:list_to_atom(Op),
 	 erlang:list_to_atom(Fun),
-	 lists:map(fun(X)-> apply(erlang, list_to_integer, [X]) end, Args)}.
+	 case string:to_integer(Arg) of
+		{N, _} -> N;
+		_ -> [] end}. 
 
 get_data(File_name) ->
 	case file:open(File_name, [read, raw]) of
