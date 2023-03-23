@@ -48,8 +48,7 @@ coordinator(Workers, JobsInProgress) ->
             io:format("No workers available, waiting for new workers to join~n"),
             coordinator(Workers1, JobsInProgress);
         true ->
-            io:format("Coordinator ready, do you want to start executing the tasks in the input file? [y/n]~n"),
-            case io:fread() of
+            case io:fread("Coordinator ready, do you want to start executing the tasks in the input file? [y/n]~n", "~s") of
                 {ok, ["y"]} ->
                     dispatch_work(Workers1);
                     % Job_ = spawn(?MODULE, dispatch_work, [Workers1]),
