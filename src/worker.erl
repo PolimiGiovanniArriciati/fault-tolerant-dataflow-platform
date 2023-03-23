@@ -19,7 +19,7 @@ start(Host, Port) ->
 worker_routine(Sock) ->
     case gen_tcp:recv(Sock, 0) of
         {ok, Msg} ->
-            {work, Pid, {Operation, Function, Args}, Data} = binary_to_term(Msg),
+            {job, {Pid, {Operation, Function, Args}, Data}} = binary_to_term(Msg),
             Result = erlang:apply(functions, Operation, [Function, Args, Data]),
              case gen_tcp:send(Sock, term_to_binary({result, Pid, Result})) of
                 ok ->
@@ -30,6 +30,9 @@ worker_routine(Sock) ->
             end;
         {error, Error} ->
             io:fwrite("Error: ~w,~n...shutting down the worker", [Error]),
+            halt();
+        Error ->
+            io:format("Unexpected message: ~w~n", [Error]),
             halt()
     end,
     worker_routine(Sock).

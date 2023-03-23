@@ -13,7 +13,6 @@ start(Port) ->
     case gen_tcp:listen(Port, [binary, {packet, 0}, {active, false}]) of
         {ok, AcceptSock} -> 
             io:format("AcceptSocket generated, ready to listen for new workers~n"),
-            % accepts incoming connections from the workers
             CoordinatorPid = spawn(?MODULE, coordinator, [[],[]]),
             accept_connection(CoordinatorPid, AcceptSock, []);
         {error, ErrorMessage} -> 
@@ -48,7 +47,7 @@ coordinator(Workers, JobsInProgress) ->
             io:format("No workers available, waiting for new workers to join~n"),
             coordinator(Workers1, JobsInProgress);
         true ->
-            case io:fread("Coordinator ready, do you want to start executing the tasks in the input file? [y/n]~n", "~s") of
+            case io:fread("Coordinator ready, do you want to start executing the tasks in the input file? [y/n]", "~s") of
                 {ok, ["y"]} ->
                     dispatch_work(Workers1);
                     % Job_ = spawn(?MODULE, dispatch_work, [Workers1]),
@@ -61,9 +60,11 @@ coordinator(Workers, JobsInProgress) ->
 
 % Sends the work to the ready workers and waits for the results
 dispatch_work(Workers) ->
-    {ok, Npartitions, Ops, InputList} = file_processing:get_operations(?NAME),
+    {ok, Npartitions, Ops} = file_processing:get_operations("in/op"), %FIXME?NAME),
+    {ok, InputList}        = file_processing:get_data("in/data"),     %?NAME),
     Inputs = partition:partition(InputList, Npartitions),
     [spawn(?MODULE, dispatch_work, [Ops, In, self()]) || In <- lists:zip(lists:seq(1, Npartitions), Inputs)],
+    % TODO: collector for reduce operations
     ResultCollectorPid = spawn(?MODULE, get_results, [self(), #{}, Npartitions]),
     jobs_queue(Workers, [], ResultCollectorPid).
 
@@ -71,17 +72,20 @@ dispatch_work([], Out, CoordinatorPid) ->
     CoordinatorPid ! {done, Out};
 
 dispatch_work([Op | Ops], In, QueuePid) ->
+    io:format("Dispatching work to the queue~n~s", [io_lib:format("~p", [Op])]),
     case Op of
         {reduce, _} -> ok;
             %TODO
         _ ->
-        QueuePid ! {job, self(), Op, In},
+        QueuePid ! {job, {self(), Op, In}},
         receive
             {result, Result} ->
                 dispatch_work(Ops, Result, QueuePid);
             {error, Error} ->
                 io:format("Error in coordinator listener ~w~n", [Error]),
-                dispatch_work(Ops, In, QueuePid)
+                dispatch_work([Op | Ops], In, QueuePid)
+        after 3000 ->
+            self() ! {error, "Timeout in coordinator listener"}
         end
     end.
 
@@ -98,22 +102,29 @@ get_results(CoordinatorPid, OutMap, N) ->
 % Coordinator manages the workers queue, assigning jobs to the workers
 jobs_queue([Worker | Ls], DispatcherJobs, ResultCollectorPid) ->
     if
-        Worker /= [] andalso DispatcherJobs /= [] ->
-            {DispatcherPid, Job} = list:nth(1, DispatcherJobs),
-            gen_tcp:send(Worker, term_to_binary({work, DispatcherPid, Job})),
-            jobs_queue(Ls, list:tail(DispatcherJobs), ResultCollectorPid)
-    end,
-    receive
-        {job, Job1} ->
-            jobs_queue([Worker | Ls], DispatcherJobs ++ [Job1], ResultCollectorPid);
-        {join, NewWorker} ->
-            jobs_queue([NewWorker, Worker | Ls], DispatcherJobs, ResultCollectorPid);
-        {done, NewWorker} ->
-            jobs_queue([NewWorker, Worker | Ls], DispatcherJobs, ResultCollectorPid);
-        {error, Error} ->
-            io:format("Error in coordinator listener ~w~n", [Error]),
-            jobs_queue([Worker | Ls], DispatcherJobs, ResultCollectorPid)
-    end.
+        Worker =/= [] andalso DispatcherJobs =/= [] ->
+            [Job | Jobs] = DispatcherJobs,
+            gen_tcp:send(Worker, term_to_binary({job, Job})),
+            jobs_queue(Ls, Jobs, ResultCollectorPid);
+        true ->
+            receive
+                {job, Job1} ->
+                    jobs_queue([Worker | Ls], DispatcherJobs ++ [Job1], ResultCollectorPid);
+                {join, NewWorker} ->
+                    jobs_queue([NewWorker, Worker | Ls], DispatcherJobs, ResultCollectorPid);
+                {done, NewWorker} ->
+                    jobs_queue([NewWorker, Worker | Ls], DispatcherJobs, ResultCollectorPid);
+                {result, Output} ->
+                    file_processing:save_data("out/data", Output);
+                {error, CrushedWorker, Error} ->
+                    io:format("Error in coordinator listener ~w~n", [Error]),
+                    Workers = lists:delete(CrushedWorker, [Worker | Ls]),
+                    jobs_queue(Workers, DispatcherJobs, ResultCollectorPid);
+                Error ->
+                    io:format("Error in coordinator listener, unexpected message:~n~w~n", [Error]),
+                    jobs_queue([Worker | Ls], DispatcherJobs, ResultCollectorPid)
+            end
+        end.
 
 % Coordinator listener manages the communication with the worker
 % Waits to receive messages from the host and 
@@ -121,18 +132,20 @@ socket_listener(CoordinatorPid, Sock) ->
     case gen_tcp:recv(Sock, 0) of
         {ok, Msg} ->
             case binary_to_term(Msg) of 
-                % TODO: maybe differenciate the cases of join and result, with different actors
                 join -> 
                     io:format("New worker has joined~n"),
                     CoordinatorPid ! {join, Sock};
                 {result, DispatcherId, Result} ->
                     DispatcherId ! {result, Result},
-                    CoordinatorPid ! {done, Sock}
+                    CoordinatorPid ! {done, Sock};
                     % Updates the coordinator about the worker that has finished the job
+                Error ->
+                    io:format("Error in socket listener, unexpected message:~n~w~n", [Error]),
+                    CoordinatorPid ! {error, Sock, Error}
             end,
             socket_listener(CoordinatorPid, Sock);
         {error, Error} ->
             io:format("Error in coordinator listener ~w~n", [Error]),
             io:format("Closing the socket~n"),
-            CoordinatorPid ! {error, Error}
+            CoordinatorPid ! {error, Sock, Error}
     end.

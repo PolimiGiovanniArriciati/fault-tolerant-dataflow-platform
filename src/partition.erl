@@ -5,8 +5,7 @@ partition(L, N) ->
     M = length(L),
     Chunk = M div N,
     End = M - Chunk*(N-1),
-    RevList = parthelp(L, N, 1, Chunk, End, []),
-    lists:reverse(RevList).
+    parthelp(L, N, 1, Chunk, End, []).
 
 parthelp(L, 1, P, _, E, Res) ->
     Res ++ [lists:sublist(L, P, E)];

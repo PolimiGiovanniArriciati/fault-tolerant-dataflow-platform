@@ -47,7 +47,7 @@ read_data(File, {ok, Line}, Acc) ->
 
 read_data(File, eof, Acc) ->
 	file:close(File),
-	lists:reverse(Acc).
+	{ok, lists:reverse(Acc)}.
 
 % Split the operations to be performed, the functions and eventually the arguments
 % data is in form of [{Key, Value}, ...]
