@@ -8,7 +8,7 @@ get_operations(File_name) ->
 			read_op(File);
 		{error, Reason} ->
 			io:format("Error: ~p~n", [Reason]),
-			test
+			{error, Reason}
 	end.
 
 read_op(File) ->
@@ -38,7 +38,7 @@ get_data(File_name) ->
 			read_data(File, file:read_line(File), []);
 		{error, Reason} ->
 			io:format("Error: ~p~n", [Reason]),
-			test
+			{error, Reason}
 	end.
 
 read_data(File, {ok, Line}, Acc) ->

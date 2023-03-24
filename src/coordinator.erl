@@ -63,16 +63,21 @@ coordinator(Workers, JobsInProgress) ->
 
 start_work(Workers) ->
     Operations = get_in("Input operations to execute: "),
-    {Outcome1, Npartitions, Ops} = file_processing:get_operations("in/" ++ Operations),
     FileName =get_in("Input file to process: "),
-    {Outcome2, InputList}        = file_processing:get_data("in/"++FileName),
-    if  {Outcome1, Outcome2} =:= {ok, ok} ->
-            Inputs = partition:partition(InputList, Npartitions),
-            [spawn(?MODULE, dispatch_work, [Ops, Data, self()]) || Data <- lists:zip(lists:seq(1, Npartitions), Inputs)],
-            ResultCollectorPid = spawn(?MODULE, get_results, [self(), #{}, Npartitions]),
-            jobs_queue(Workers, [], ResultCollectorPid, FileName);
-        true ->
-            io:fwrite("An error has occured with the input and operation files, try again ~n"),
+    case file_processing:get_operations("in/" ++ Operations) of
+        {ok, Npartitions, Ops} ->
+            case file_processing:get_data("in/"++FileName) of
+                {ok, InputList} ->
+                Inputs = partition:partition(InputList, Npartitions),
+                [spawn(?MODULE, dispatch_work, [Ops, Data, self()]) || Data <- lists:zip(lists:seq(1, Npartitions), Inputs)],
+                ResultCollectorPid = spawn(?MODULE, get_results, [self(), #{}, Npartitions]),
+                jobs_queue(Workers, [], ResultCollectorPid, FileName);
+            {error, Reason} ->
+                io:fwrite("An error has occured with the input file reason: ~w , try again ~n", [Reason]),
+                start_work(Workers)
+            end;
+        {error, Reason} ->
+            io:fwrite("An error has occured with the operation reason: ~w , try again ~n", [Reason]),
             start_work(Workers)
     end.
 
