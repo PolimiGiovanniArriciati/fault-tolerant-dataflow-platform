@@ -153,10 +153,9 @@ jobs_queue(Workers, DispatchersJobs, ResultCollectorPid, FileName) ->
     N :: integer().
 
 get_results(CoordinatorPid, OutputMap, 0) ->
-    Output = lists:flatmap(fun({_, V}) -> V end, maps:to_list(OutputMap)),
     ?LOG("All results received, sending to the coordinator~n"),
-    ?LOG("Output: ~w~n", [Output]),
-    CoordinatorPid ! {done_work, Output};
+    ?LOG("Output: ~w~n", [OutputMap]),
+    CoordinatorPid ! {done_work, lists:flatten(maps:values(OutputMap))};
 
 get_results(CoordinatorPid, OutputMap, N) ->
     receive
