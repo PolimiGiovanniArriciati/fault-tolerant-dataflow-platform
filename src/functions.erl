@@ -3,7 +3,7 @@
 -compile({no_warn_unused_function}).
 
 -spec map(Op, Arg, ListKV) -> ListKV when
-	Op ::  fun((Int, Int) -> Int),
+	Op ::  fun(({Key, Value})->{Key, Value}),
 	Arg :: Int,
 	ListKV :: list({Key, Value}),
 	Key :: Int,
@@ -57,7 +57,7 @@ multiply(X, Y) ->
 		X * Y.
 
 divide(X, Y) ->
-		X / Y.
+		X div Y.
 
 power(X, Y) ->
 	math:pow(X, Y).

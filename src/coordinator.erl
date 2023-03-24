@@ -4,8 +4,8 @@
 -export([dispatch_work/3, get_results/3, accept_connection/2, socket_listener/2, jobs_queue/4, coordinator/2]).
 -importlib([file_processing, partition]).
 -define(NAME, string:chomp(io:get_line("Input file to process: "))).
--define(LOG(STRING), io:format("" ++ STRING ++ "~n")).
--define(LOG(STRING, ARGS), io:format("" ++ STRING ++ "~n", ARGS)).
+-define(LOG(STRING), io:format("_LOG_ " ++ STRING)).
+-define(LOG(STRING, ARGS), io:format("_LOG_ " ++ STRING, ARGS)).
 
 start() ->
     start(8080).
@@ -76,21 +76,20 @@ start_work(Workers) ->
             start_work(Workers)
     end.
 
--spec dispatch_work(Ops, Data, CoordinatorPid) -> ok when
+-spec dispatch_work(Ops, Input, CoordinatorPid) -> ok when
     Ops :: [{Op, Function, integer()}],
-    Data :: {PartitionNumber, Data},
+    Input :: {PartitionNumber, [Data]},
     CoordinatorPid :: pid(),
     Op :: map | reduce | changeKey,
     Function :: atom(),
     PartitionNumber :: integer(),
-    Data :: term().
+    Data :: {integer(), integer()}.
 
 dispatch_work([], Output, CoordinatorPid) ->
     CoordinatorPid ! {endDataflowPartition, Output};
 
 dispatch_work([{reduce, Function, Arg} | Ops], {_, Data}, QueuePid) ->
     ?LOG("~nDispatching work to the queue~n~p", [reduce]),
-    ?LOG("~nData: ~w~n", [Data]),
     QueuePid ! {reduce_prep, Data, self()},
     receive
         {reduce, []} -> not_enough_keys;
@@ -135,8 +134,7 @@ jobs_queue(Workers, DispatchersJobs, ResultCollectorPid, FileName) ->
             ResultCollectorPid ! {endDataflowPartition, Output},
             jobs_queue(Workers, DispatchersJobs, ResultCollectorPid, FileName);
         {done_work, Output} ->
-            %FIXME: file name 
-            file_processing:save_data("data", Output);
+            file_processing:save_data(FileName, Output);
         {error, CrushedWorker, Error} ->
             ?LOG("Error in coordinator listener ~w~n", [Error]),
             Workers1 = lists:delete(CrushedWorker, Workers),
@@ -162,7 +160,7 @@ get_results(CoordinatorPid, OutputMap, N) ->
             ?LOG("Received result from partition ~w~n", [PartitionNumber]),
             ?LOG("OutputMap: ~w~n", [OutputMap1]),
             get_results(CoordinatorPid, OutputMap1, N-1);
-        {reduce_prep, {_, Data}, DispatcherId} ->
+        {reduce_prep, Data, DispatcherId} ->
             N1 = prepare_reduce_input([DispatcherId], Data, N, 1),
             if N =/= N1 -> ?LOG("Changed number of partitions: ~p became ~p ~n", [N, N1]) end,
             get_results(CoordinatorPid, #{}, N1)
