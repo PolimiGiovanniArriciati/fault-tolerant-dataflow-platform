@@ -2,4 +2,5 @@ partitions = 1
 map subtract 10
 map add 22
 map multiply 100
+reduce add 1
 changeKey multiply 300
