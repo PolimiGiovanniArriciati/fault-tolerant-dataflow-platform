@@ -63,13 +63,18 @@ coordinator(Workers, JobsInProgress) ->
 
 start_work(Workers) ->
     Operations = get_in("Input operations to execute: "),
-    {ok, Npartitions, Ops} = file_processing:get_operations("in/" ++ Operations),
+    {Outcome1, Npartitions, Ops} = file_processing:get_operations("in/" ++ Operations),
     FileName =get_in("Input file to process: "),
-    {ok, InputList}        = file_processing:get_data("in/"++FileName),
-    Inputs = partition:partition(InputList, Npartitions),
-    [spawn(?MODULE, dispatch_work, [Ops, Data, self()]) || Data <- lists:zip(lists:seq(1, Npartitions), Inputs)],
-    ResultCollectorPid = spawn(?MODULE, get_results, [self(), #{}, Npartitions]),
-    jobs_queue(Workers, [], ResultCollectorPid, FileName).
+    {Outcome2, InputList}        = file_processing:get_data("in/"++FileName),
+    if  {Outcome1, Outcome2} =:= {ok, ok} ->
+            Inputs = partition:partition(InputList, Npartitions),
+            [spawn(?MODULE, dispatch_work, [Ops, Data, self()]) || Data <- lists:zip(lists:seq(1, Npartitions), Inputs)],
+            ResultCollectorPid = spawn(?MODULE, get_results, [self(), #{}, Npartitions]),
+            jobs_queue(Workers, [], ResultCollectorPid, FileName);
+        true ->
+            io:fwrite("An error has occured with the input and operation files, try again ~n"),
+            start_work(Workers)
+    end.
 
 -spec dispatch_work(Ops, Data, CoordinatorPid) -> ok when
     Ops :: [{Op, Function, integer()}],
@@ -157,7 +162,7 @@ get_results(CoordinatorPid, OutputMap, N) ->
             ?LOG("Received result from partition ~w~n", [PartitionNumber]),
             ?LOG("OutputMap: ~w~n", [OutputMap1]),
             get_results(CoordinatorPid, OutputMap1, N-1);
-        {reduce_prep, Data, DispatcherId} ->
+        {reduce_prep, {_, Data}, DispatcherId} ->
             N1 = prepare_reduce_input([DispatcherId], Data, N, 1),
             if N =/= N1 -> ?LOG("Changed number of partitions: ~p became ~p ~n", [N, N1]) end,
             get_results(CoordinatorPid, #{}, N1)
