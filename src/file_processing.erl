@@ -30,7 +30,7 @@ split_operations(Operation) ->
 	 erlang:list_to_atom(Fun),
 	 case string:to_integer(Arg) of
 		{N, _} -> N;
-		_ -> [] end}. 
+		_ -> 0 end}. 
 
 get_data(File_name) ->
 	case file:open(File_name, [read, raw]) of

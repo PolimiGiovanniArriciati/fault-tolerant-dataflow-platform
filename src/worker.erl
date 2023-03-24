@@ -20,6 +20,7 @@ worker_routine(Sock) ->
     case gen_tcp:recv(Sock, 0) of
         {ok, Msg} ->
             {job, {CallerPid, {Operation, Function, Args}, Data}} = binary_to_term(Msg),
+            io:format("Worker received job: ~w~n", [Operation]),
             Result = erlang:apply(functions, Operation, [Function, Args, Data]),
              case gen_tcp:send(Sock, term_to_binary({result, CallerPid, Result})) of
                 ok ->

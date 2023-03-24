@@ -2,11 +2,25 @@
 -export([map/3, changeKey/3, reduce/3, add/2, subtract/2, multiply/2, divide/2, power/2, sqrt/1, sum/3, prime_factor_decomposition/1]).
 -compile({no_warn_unused_function}).
 
+-spec map(Op, Arg, ListKV) -> ListKV when
+	Op ::  fun((Int, Int) -> Int),
+	Arg :: Int,
+	ListKV :: list({Key, Value}),
+	Key :: Int,
+	Value :: Int.
+
 map(Op, Arg, List) ->
 	lists:map(fun({K, V}) ->
 					{K, apply(?MODULE, Op, [V, Arg])}
 				end,
 				List).
+
+-spec changeKey(Op, Arg, ListKV) -> ListKV when
+	Op ::  fun((Int, Int) -> Int),
+	Arg :: Int,
+	ListKV :: list({Key, Value}),
+	Key :: Int,
+	Value :: Int.
 
 changeKey(Op, Arg, List) ->
 	lists:map(fun({K, V}) ->
@@ -14,22 +28,25 @@ changeKey(Op, Arg, List) ->
 				end,
 				List).
 
--spec reduce(Op, Args, List) -> Map when
-	Op ::  fun((Int, Int, Map) -> Map),
-	Args :: list(Int),
-	List :: list(Int),
-	Map :: map().
+-spec reduce(Op, Arg, ListKV) -> ListKV when
+	Op ::  fun((Int, Int) -> Int),
+	Arg :: Int,
+	ListKV :: list({Key, Values}),
+	Key :: Int,
+	Values :: list(Int).
 
-reduce(Op, _, List) ->
-	lists:foldl(fun({K, V}, Map) ->
-					case maps:find(K, Map) of
-						{ok, Acc} ->
-							maps:put(K, apply(?MODULE, Op, [V, Acc]), Map);
-						error ->
-							maps:put(K, V, Map)
-					end
-				end, #{}, List).
+reduce(_, _, []) ->
+	[];
 
+reduce(Op, Arg, [X | Xs]) ->
+	reduce(Op, Arg, X) ++ reduce(Op, Arg, Xs);
+
+reduce(Op, Arg, {Key, Values}) ->
+	[{Key,
+	 lists:foldl(fun(X, Acc) -> apply(?MODULE, Op, [X, Acc]) end,
+				 Arg,
+				 Values)}].
+	
 add(X, Y) ->
 		X + Y.
 
