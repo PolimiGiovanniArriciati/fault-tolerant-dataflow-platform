@@ -59,8 +59,8 @@ coordinator(Workers, JobsInProgress) ->
     end.
 
 dispatch_work(Workers) ->
-    {ok, Npartitions, Ops} = file_processing:get_operations("in/op"), %FIXME:?NAME),
-    {ok, InputList}        = file_processing:get_data("in/data"),     %FIXME:?NAME),
+    {ok, Npartitions, Ops} = file_processing:get_operations("../in/op"), %FIXME:?NAME),
+    {ok, InputList}        = file_processing:get_data("../in/data"),     %FIXME:?NAME),
     Inputs = partition:partition(InputList, Npartitions),
     [spawn(?MODULE, dispatch_work, [Ops, Data, self()]) || Data <- lists:zip(lists:seq(1, Npartitions), Inputs)],
     % TODO: collector for reduce operations
@@ -131,29 +131,42 @@ jobs_queue(Workers, DispatcherJobs, ResultCollectorPid) ->
             jobs_queue(Workers, DispatcherJobs ++ [Job1], ResultCollectorPid); %appends the job
         {join, NewWorker} ->
             jobs_queue([NewWorker | Workers], DispatcherJobs, ResultCollectorPid);
+        % This message come from a single dispatcher. 
+        % Each one will send this, when they arrive to dispatch the reduce!
+        % Data is from the single dispatcher and is the first get by the get_reduce_input
         {reduce_prep, Data, Pid} ->
-            %TODO:
-            % Flatten list of the partitions, then the flat list 
-            % Is used by the fold to create a list of {key, inputlist}
-            % The list can then be
-            NewFlatList = lists:flatten(Data),
+            % Get the lists of tuples {Key, Value} from all Dispatchers' partitions
+            NewFlatList = get_reduce_input(Data, lists:flat_lenght(DispatcherJobs) - 1),
+            % Reduce all the partitions into a list {Key, ListOfValues}
             MapReduce = lists:foldl(fun({K, V}, Acc) ->
                             case maps:find(K,Acc) of
                                 {ok, List} ->
-                                    maps:put(K, [V | List]),
+                                    maps:put(K, [V | List]);
                                 error ->
                                     maps:put(K, [V])
                             end
                         end,
                         #{}, % Map is more efficient, Turing, 1950 CIRCA.
                         NewFlatList),
-            
-            apply(reduce, Op, [Data]),
-            ResultCollectorPid ! {reduce, Data},
-            jobs_queue(Workers, DispatcherJobs, ResultCollectorPid),
+            NKey = lists:flat_length(MapReduce),
+            NPartition = lists:flat_length(DispatcherJobs),
+            if 
+                % case less key than partitions, the remaining partitions are empty
+                NKey < NPartition ->
+                    NewPartitionedList = partition:partition(MapReduce, NKey) ++ lists:duplicate([], NPartition - NKey);
+                true ->
+                    NewPartitionedList = partition:partition(MapReduce, NKey)
+            end,
+        % Sends each reduced partition to a dispatcher ({{Npartition, Data}, Dispatcher})
+            lists:foreach(fun(Tuple) -> 
+                {DataToSend, DispatcherId} = Tuple, 
+                DispatcherId ! {reduce, DataToSend} end, lists:zip(lists:zip(lists:seq(1, NPartition), NewPartitionedList), DispatcherJobs)),
+            jobs_queue(Workers, DispatcherJobs, ResultCollectorPid);
         {reduce_done, Ops, Data} ->
-            Input = partition:reduce(Data, ?N),
-            [spawn(?MODULE, dispatch_work, [Ops, In, self()]) || In <- Input];
+            % TODO
+            ok;
+            %Input = partition:reduce(Data, ?N),
+            %[spawn(?MODULE, dispatch_work, [Ops, In, self()]) || In <- Input];
         {done, Output} ->
             ResultCollectorPid ! {result, Output};
         {result, Output} ->
@@ -165,6 +178,27 @@ jobs_queue(Workers, DispatcherJobs, ResultCollectorPid) ->
         Error ->
             io:format("Error in coordinator listener, unexpected message:~n~w~n", [Error]),
             jobs_queue(Workers, DispatcherJobs, ResultCollectorPid)
+    end.
+
+% This function just waits to have all the partitions from the dispatcher
+% until it has all the input partitions for the reduce
+-spec get_reduce_input(Data, DispatcherJobs) -> List when 
+    Data::[A],
+    A::int,
+    DispatcherJobs::[B],
+    B::process_id,
+    List::[C],
+    C::integer.
+
+% Get reduced in case has no other dispatcher to wait, just return the new data
+get_reduce_input(Data, 0) ->
+    Data;
+
+% Still there are dispatch workers to get the input partition for the reduce
+get_reduce_input(Data, NumDispatchWorkers) ->
+    receive 
+        {reduce_prep, NewData, _} ->
+            Data ++ get_reduce_input(NewData, NumDispatchWorkers - 1)
     end.
 
 % Coordinator listener manages the communication with the worker
