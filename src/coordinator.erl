@@ -154,19 +154,20 @@ jobs_queue(Workers, DispatchersJobs, FileName) ->
 get_results(CoordinatorPid, OutputMap, 0) ->
     ?LOG("All results received, sending to the coordinator~n"),
     Output = lists:flatten(maps:values(OutputMap)),
-    ?LOG("Output: ~p~n", [Output]),
+    %?LOG("Output: ~p~n", [Output]),
     CoordinatorPid ! {done_work, Output};
 
 get_results(CoordinatorPid, OutputMap, NPartitions) ->
     receive
         {end_dataflow_partition, {PartitionNumber, Output}} ->
             OutputMap1 = maps:put(PartitionNumber, Output, OutputMap),
-            ?LOG("Received result from partition ~w~n", [PartitionNumber]),
-            ?LOG("OutputMap: ~w~n", [OutputMap1]),
+            %?LOG("Received result from partition ~w~n", [PartitionNumber]),
+            %?LOG("OutputMap: ~w~n", [OutputMap1]),
             get_results(CoordinatorPid, OutputMap1, NPartitions-1);
         {reduce_prep, Data, DispatcherId} ->
             NewNPartitions = prepare_reduce_input([DispatcherId], Data, NPartitions, 1),
-            if NPartitions =/= NewNPartitions -> ?LOG("Changed number of partitions: ~p became ~p ~n", [NPartitions, NewNPartitions]) end,
+            ?LOG("Number of partitions: ~p became ~p ~n", [NPartitions, NewNPartitions]),
+            if NPartitions =/= NewNPartitions -> ?LOG("Changed number of partitions: ~p became ~p ~n", [NPartitions, NewNPartitions]); true -> ok end,
             get_results(CoordinatorPid, #{}, NewNPartitions)
     end.
 
