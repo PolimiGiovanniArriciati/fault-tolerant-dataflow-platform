@@ -1,0 +1,15 @@
+graph TD;
+
+subgraph Main Thread
+		A[start] --> |open socket| B [routine];
+		B        --> |receives input| C[dispatcher];
+		C        --> |dispatch partition and operations| D [jobs_queue];
+		D        --> |receives results| B;
+	end
+
+	subgraph Worker
+		C        --> |sends data| E [data to process]
+		E        --> |compute| F [computer]
+		F        --> |processed| E
+		F        --> |fail| E
+	end;
