@@ -1,4 +1,4 @@
-partitions = 4
+partitions = 30
 map add 1
 changeKey multiply 4
 reduce add 0

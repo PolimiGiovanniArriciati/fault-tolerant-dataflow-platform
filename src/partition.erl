@@ -3,17 +3,12 @@
 
 partition(L, N) ->
     M = length(L),
-    Chunk = M div N,
-    End = M - Chunk*(N-1),
-    if  Chunk =:= 0 ->
-            lists:sublist(L, 1, End);
-        true ->
-            parthelp(L, N, 1, Chunk, End, [])
-    end.
+    Chunk = case M div N of 0 -> 1; X -> X end,
+    partition(L, N, Chunk, []).
 
-parthelp(L, 1, P, _, E, Res) ->
-    Res ++ [lists:sublist(L, P, E)];
+partition(L, N, Chunk, Acc) when length(L) =< Chunk orelse N == 1 ->
+    lists:reverse([L | Acc]);
 
-parthelp(L, N, P, C, E, Res) ->
-    R = lists:sublist(L, P, C),
-    parthelp(L, N-1, P+C, C, E, Res ++ [R]).
+partition(L, N, Chunk, Acc) ->
+    {H, T} = lists:split(Chunk, L),
+    partition(T, N-1, Chunk, [H | Acc]).

@@ -2,34 +2,34 @@
 -export([map/3, changeKey/3, reduce/3, add/2, subtract/2, multiply/2, divide/2, power/2, sqrt/1, sum/3, prime_factor_decomposition/1]).
 -compile({no_warn_unused_function}).
 
--spec map(Op, Arg, ListKV) -> ListKV when
-	Op ::  fun(({Key, Value})->{Key, Value}),
+-spec map(Fun, Arg, ListKV) -> ListKV when
+	Fun ::  fun(({Key, Value})->{Key, Value}),
 	Arg :: Int,
 	ListKV :: list({Key, Value}),
 	Key :: Int,
 	Value :: Int.
 
-map(Op, Arg, List) ->
+map(Fun, Arg, List) ->
 	lists:map(fun({K, V}) ->
-					{K, apply(?MODULE, Op, [V, Arg])}
+					{K, apply(?MODULE, Fun, [V, Arg])}
 				end,
 				List).
 
--spec changeKey(Op, Arg, ListKV) -> ListKV when
-	Op ::  fun((Int, Int) -> Int),
+-spec changeKey(Fun, Arg, ListKV) -> ListKV when
+	Fun ::  fun((Int, Int) -> Int),
 	Arg :: Int,
 	ListKV :: list({Key, Value}),
 	Key :: Int,
 	Value :: Int.
 
-changeKey(Op, Arg, List) ->
+changeKey(Fun, Arg, List) ->
 	lists:map(fun({K, V}) ->
-					{apply(?MODULE, Op, [K, Arg]), V}
+					{apply(?MODULE, Fun, [K, Arg]), V}
 				end,
 				List).
 
--spec reduce(Op, Arg, ListKV) -> ListKV when
-	Op ::  fun((Int, Int) -> Int),
+-spec reduce(Fun, Arg, ListKV) -> ListKV when
+	Fun ::  fun((Int, Int) -> Int),
 	Arg :: Int,
 	ListKV :: list({Key, Values}),
 	Key :: Int,
@@ -38,12 +38,12 @@ changeKey(Op, Arg, List) ->
 reduce(_, _, []) ->
 	[];
 
-reduce(Op, Arg, [X | Xs]) ->
-	reduce(Op, Arg, X) ++ reduce(Op, Arg, Xs);
+reduce(Fun, Arg, [X | Xs]) ->
+	reduce(Fun, Arg, X) ++ reduce(Fun, Arg, Xs);
 
-reduce(Op, Arg, {Key, Values}) ->
+reduce(Fun, Arg, {Key, Values}) ->
 	[{Key,
-	 lists:foldl(fun(X, Acc) -> apply(?MODULE, Op, [X, Acc]) end,
+	 lists:foldl(fun(X, Acc) -> apply(?MODULE, Fun, [X, Acc]) end,
 				 Arg,
 				 Values)}].
 	

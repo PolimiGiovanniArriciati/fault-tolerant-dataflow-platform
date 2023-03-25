@@ -1,7 +1,7 @@
 -module('coordinator').
 -export([start/0, start/1]).
 %Functions for internal use not called directly
--export([dispatch_work/3, get_results/3, accept_connection/2, socket_listener/2, jobs_queue/4, coordinator/2]).
+-export([dispatch_work/4, get_results/3, accept_connection/2, socket_listener/2, jobs_queue/3, coordinator/1]).
 -importlib([file_processing, partition]).
 -define(NAME, string:chomp(io:get_line("Input file to process: "))).
 -define(LOG(STRING), io:format("_LOG_ " ++ STRING)).
@@ -15,7 +15,7 @@ start(Port) ->
     case gen_tcp:listen(Port, [binary, {packet, 0}, {active, false}]) of
         {ok, AcceptSock} -> 
             ?LOG("AcceptSocket generated, ready to listen for new workers on port ~p~n", [Port]),
-            CoordinatorPid = spawn(?MODULE, coordinator, [[],[]]),
+            CoordinatorPid = spawn(?MODULE, coordinator, [[]]),
             accept_connection(CoordinatorPid, AcceptSock);
         {error, eaddrinuse} ->
             ?LOG("Port ~p already in use trying next one~n", [Port]),
@@ -24,19 +24,18 @@ start(Port) ->
             ?LOG("Unexpected error launching the coordinator: ~p~n", [ErrorMessage])
     end.
 
-accept_connection(Coordinator_id, AcceptSock) ->
+accept_connection(CoordinatorPid, AcceptSock) ->
     case gen_tcp:accept(AcceptSock) of
         {ok, Sock} ->
             ?LOG("Coordinator accepted a new connection~n"),
-            spawn(?MODULE, socket_listener, [Coordinator_id, Sock]),
-            accept_connection(Coordinator_id, AcceptSock);
+            spawn(?MODULE, socket_listener, [CoordinatorPid, Sock]);
         {error, Error} ->
-            ?LOG("Unexpected error during socket accept!! ~w~n", Error),
-            accept_connection(Coordinator_id, AcceptSock)
-    end.
+            ?LOG("Unexpected error during socket accept!! ~w~n", Error)
+    end,
+    accept_connection(CoordinatorPid, AcceptSock).
 
 % Coordinator has parameter R : ready workers (a list) and B: busy
-coordinator(Workers, JobsInProgress) ->
+coordinator(Workers) ->
     ?LOG("Coordinator waiting for workers"),
     receive
         % Receives the socket of a new joining worker
@@ -46,19 +45,19 @@ coordinator(Workers, JobsInProgress) ->
             ?LOG("no workers joined yet~n"),
             Workers1 = Workers
     end,
-    if Workers1 == [] ->
+    if  Workers1 == [] ->
             ?LOG("No workers available, waiting for new workers to join~n"),
-            coordinator(Workers1, JobsInProgress);
+            coordinator(Workers1);
         true ->
             case io:fread("Coordinator ready, do you want to start executing the tasks in the input file? [y/n]", "~s") of
                 {ok, ["y"]} ->
                     start_work(Workers1);
                 {ok, ["n"]} ->
-                    coordinator(Workers1, JobsInProgress);
+                    coordinator(Workers1);
                 {ok, _} ->
                     ?LOG("Invalid input, please type 'y' or 'n'~n")
             end,
-            coordinator(Workers1, [])
+            coordinator(Workers1)
     end.
 
 start_work(Workers) ->
@@ -69,9 +68,10 @@ start_work(Workers) ->
             case file_processing:get_data("in/"++FileName) of
                 {ok, InputList} ->
                 Inputs = partition:partition(InputList, Npartitions),
-                [spawn(?MODULE, dispatch_work, [Ops, Data, self()]) || Data <- lists:zip(lists:seq(1, Npartitions), Inputs)],
-                ResultCollectorPid = spawn(?MODULE, get_results, [self(), #{}, Npartitions]),
-                jobs_queue(Workers, [], ResultCollectorPid, FileName);
+                ?LOG("Input: ~p~n", [Inputs]),
+                CollectorPid = spawn(?MODULE, get_results, [self(), #{}, length(Inputs)]),
+                [spawn(?MODULE, dispatch_work, [Ops, Data, self(), CollectorPid]) || Data <- lists:zip(lists:seq(1, length(Inputs)), Inputs)],
+                jobs_queue(Workers, [], FileName);
             {error, Reason} ->
                 io:fwrite("An error has occured with the input file reason: ~w , try again ~n", [Reason]),
                 start_work(Workers)
@@ -81,69 +81,68 @@ start_work(Workers) ->
             start_work(Workers)
     end.
 
--spec dispatch_work(Ops, Input, CoordinatorPid) -> ok when
+-spec dispatch_work(Ops, Input, CoordinatorPid, CollectorPid) -> ok when
     Ops :: [{Op, Function, integer()}],
-    Input :: {PartitionNumber, [Data]},
+    Input :: {PartitionNumber, Data},
     CoordinatorPid :: pid(),
+    CollectorPid :: pid(),
     Op :: map | reduce | changeKey,
     Function :: atom(),
     PartitionNumber :: integer(),
-    Data :: {integer(), integer()}.
+    Data :: [{integer(), integer()}].
 
-dispatch_work([], Output, CoordinatorPid) ->
-    CoordinatorPid ! {endDataflowPartition, Output};
+dispatch_work([], Output, _, CollectorPid) ->
+    CollectorPid ! {end_dataflow_partition, Output};
 
-dispatch_work([{reduce, Function, Arg} | Ops], {_, Data}, QueuePid) ->
-    ?LOG("~nDispatching work to the queue~n~p", [reduce]),
-    QueuePid ! {reduce_prep, Data, self()},
+dispatch_work([{reduce, Function, Arg} | Ops], {_, Data}, CoordinatorPid, CollectorPid) ->
+    ?LOG("Dispatching work to the queue~p~n", [reduce]),
+    CollectorPid ! {reduce_prep, Data, self()},
     receive
-        {reduce, []} -> not_enough_keys;
+        {reduce, [], _} -> not_enough_keys;
         {reduce, ResultToReduce, PartitionNumber} ->
-            QueuePid ! {job, {self(), {reduce, Function, Arg}, ResultToReduce}},
-            receive_work({reduce, Function, Arg}, Ops, {PartitionNumber, Data}, QueuePid)
+            CoordinatorPid ! {job, {self(), {reduce, Function, Arg}, ResultToReduce}},
+            receive_work({reduce, Function, Arg}, Ops, {PartitionNumber, Data}, CoordinatorPid, CollectorPid)
     end;
 
-dispatch_work([Op | Ops], {PartitionNumber, Data}, QueuePid) ->
-    ?LOG("Dispatching work to the queue~n~s", [io_lib:format("~p", [Op])]),
-    QueuePid ! {job, {self(), Op, Data}},
-    receive_work(Op, Ops, {PartitionNumber, Data}, QueuePid).
+dispatch_work([Op | Ops], {PartitionNumber, Data}, CoordinatorPid, CollectorPid) ->
+    ?LOG("Dispatching work to the queue~s~n", [io_lib:format("~p", [Op])]),
+    CoordinatorPid ! {job, {self(), Op, Data}},
+    receive_work(Op, Ops, {PartitionNumber, Data}, CoordinatorPid, CollectorPid).
 
-receive_work(Op, Ops, {PartitionNumber, Data}, QueuePid) ->
+receive_work(Op, Ops, {PartitionNumber, Data}, CoordinatorPid, CollectorPid) ->
     receive
         {result, Result} ->
-            dispatch_work(Ops, {PartitionNumber, Result}, QueuePid);
+            dispatch_work(Ops, {PartitionNumber, Result}, CoordinatorPid, CollectorPid);
         {error, Error} ->
             ?LOG("Error in coordinator listener ~w~n", [Error]),
-            dispatch_work([Op | Ops], {PartitionNumber, Data}, QueuePid)
+            dispatch_work([Op | Ops], {PartitionNumber, Data}, CoordinatorPid, CollectorPid)
     after 3000 ->
         self() ! {error, "Timeout in coordinator listener"}
     end.
 
-jobs_queue(Workers, DispatchersJobs, ResultCollectorPid, FileName)
-    when Workers =/= [] andalso DispatchersJobs =/= [] ->
-        [Job | Jobs] = DispatchersJobs,
-        [Worker | Ls] = Workers,
-        gen_tcp:send(Worker, term_to_binary({job, Job})),
-        jobs_queue(Ls, Jobs, ResultCollectorPid, FileName);
+-spec jobs_queue(Workers, DispatchersJobs, FileName) -> ok when
+    Workers :: [pid()],
+    DispatchersJobs :: [{pid(), Op, Data}],
+    FileName :: string(),
+    Op :: {map | reduce | changeKey, atom(), integer()},
+    Data :: [{integer(), integer()}].
 
-jobs_queue(Workers, DispatchersJobs, ResultCollectorPid, FileName) ->
+jobs_queue([Worker | Workers], [Job | Jobs], FileName) ->
+        gen_tcp:send(Worker, term_to_binary({job, Job})),
+        jobs_queue(Workers, Jobs, FileName);
+
+jobs_queue(Workers, DispatchersJobs, FileName) ->
     receive
         {job, Job1} ->
-            jobs_queue(Workers, DispatchersJobs ++ [Job1], ResultCollectorPid, FileName); %appends the job
+            jobs_queue(Workers, DispatchersJobs ++ [Job1], FileName); %appends the job
         {join, NewWorker} ->
-            jobs_queue([NewWorker | Workers], DispatchersJobs, ResultCollectorPid, FileName);
-        {reduce_prep, Data, Pid} ->
-            ResultCollectorPid ! {reduce_prep, Data, Pid},
-            jobs_queue(Workers, DispatchersJobs, ResultCollectorPid, FileName);
-        {endDataflowPartition, Output} ->
-            ResultCollectorPid ! {endDataflowPartition, Output},
-            jobs_queue(Workers, DispatchersJobs, ResultCollectorPid, FileName);
+            jobs_queue([NewWorker | Workers], DispatchersJobs, FileName);
         {done_work, Output} ->
             file_processing:save_data(FileName, Output);
         {error, CrushedWorker, Error} ->
             ?LOG("Error in coordinator listener ~w~n", [Error]),
             Workers1 = lists:delete(CrushedWorker, Workers),
-            jobs_queue(Workers1, DispatchersJobs, ResultCollectorPid, FileName)
+            jobs_queue(Workers1, DispatchersJobs, FileName)
     end.
 
 -spec get_results(CoordinatorPid, OutputMap, N) -> ok when
@@ -154,35 +153,36 @@ jobs_queue(Workers, DispatchersJobs, ResultCollectorPid, FileName) ->
 
 get_results(CoordinatorPid, OutputMap, 0) ->
     ?LOG("All results received, sending to the coordinator~n"),
-    ?LOG("Output: ~w~n", [OutputMap]),
-    CoordinatorPid ! {done_work, lists:flatten(maps:values(OutputMap))};
+    Output = lists:flatten(maps:values(OutputMap)),
+    ?LOG("Output: ~p~n", [Output]),
+    CoordinatorPid ! {done_work, Output};
 
-get_results(CoordinatorPid, OutputMap, N) ->
+get_results(CoordinatorPid, OutputMap, NPartitions) ->
     receive
-        {endDataflowPartition, {PartitionNumber, Output}} ->
+        {end_dataflow_partition, {PartitionNumber, Output}} ->
             OutputMap1 = maps:put(PartitionNumber, Output, OutputMap),
             ?LOG("Received result from partition ~w~n", [PartitionNumber]),
             ?LOG("OutputMap: ~w~n", [OutputMap1]),
-            get_results(CoordinatorPid, OutputMap1, N-1);
+            get_results(CoordinatorPid, OutputMap1, NPartitions-1);
         {reduce_prep, Data, DispatcherId} ->
-            N1 = prepare_reduce_input([DispatcherId], Data, N, 1),
-            if N =/= N1 -> ?LOG("Changed number of partitions: ~p became ~p ~n", [N, N1]) end,
-            get_results(CoordinatorPid, #{}, N1)
+            NewNPartitions = prepare_reduce_input([DispatcherId], Data, NPartitions, 1),
+            if NPartitions =/= NewNPartitions -> ?LOG("Changed number of partitions: ~p became ~p ~n", [NPartitions, NewNPartitions]) end,
+            get_results(CoordinatorPid, #{}, NewNPartitions)
     end.
 
--spec prepare_reduce_input(DispatchersIds, Data, NPartition, NReceived) -> NPartition when
+-spec prepare_reduce_input(DispatchersIds, Data, NPartitions, NReceived) -> NPartitions when
     DispatchersIds :: [pid()],
     Data :: [{integer(), integer()}],
-    NPartition :: integer(),
+    NPartitions :: integer(),
     NReceived :: integer().
 
-prepare_reduce_input(DispatcherIds, Datas, NPartition, NReceived) when NPartition =/= NReceived ->
+prepare_reduce_input(DispatcherIds, Datas, NPartitions, NReceived) when NPartitions =/= NReceived ->
     receive
         {reduce_prep, Data, DispatcherId} ->
-            prepare_reduce_input([DispatcherId | DispatcherIds], Data ++ Datas, NPartition, NReceived + 1)
+            prepare_reduce_input([DispatcherId | DispatcherIds], Data ++ Datas, NPartitions, NReceived + 1)
     end;
 
-prepare_reduce_input(DispatchersIds, Data, NPartition, NReceived) when NPartition == NReceived -> 
+prepare_reduce_input(DispatchersIds, Data, NPartitions, NReceived) when NPartitions == NReceived -> 
     % Reduce all the partitions into a list {Key, ListOfValues} and then re-partition it
     % It's needed because the keys may be distributed in more partition
     MapReduce = lists:foldl(
@@ -198,19 +198,20 @@ prepare_reduce_input(DispatchersIds, Data, NPartition, NReceived) when NPartitio
                 Data),
     ListReduce = maps:to_list(MapReduce),
     ?LOG("ListReduce: ~w~n", [ListReduce]),
-    NKey = erlang:length(ListReduce),
-    if
-        NKey < NPartition ->
-            NewPartitionedList = partition:partition(ListReduce, NKey) ++ lists:duplicate(NPartition - NKey, []);
-        true ->
-            NewPartitionedList = partition:partition(ListReduce, NPartition)
+    NKeys = erlang:length(ListReduce),
+    if NKeys < NPartitions ->
+        NewPartitionedList = partition:partition(ListReduce, NKeys) ++ lists:duplicate(NPartitions - NKeys, []),
+        NewNPartitions = NKeys;
+    true ->
+        NewPartitionedList = partition:partition(ListReduce, NPartitions),
+        NewNPartitions = NPartitions
     end,
-    % Sends each reduced partition to a dispatcher ({{Npartition, Data}, Dispatcher})
-    PartitionDataDispatcherList = lists:zip3(lists:seq(1, NPartition), NewPartitionedList, DispatchersIds),
+    % Sends each reduced partition to a dispatcher ({{PartitionNumber, Data}, Dispatcher})
+    PartitionDataDispatcherList = lists:zip3(lists:seq(1, NPartitions), NewPartitionedList, DispatchersIds),
     ?LOG("PartitionDataDispatcher: ~w~n", [PartitionDataDispatcherList]),
     [DispatcherId ! {reduce, DataToSend, PartitionNumber} || {PartitionNumber, DataToSend, DispatcherId} <- PartitionDataDispatcherList],
     % The number of partitions can change if the number of keys is less than the number of partitions
-    case NKey < NPartition of true -> NKey; false -> NPartition end.
+    NewNPartitions.
 
 % Manages the communication with the worker
 % A process for each worker 
