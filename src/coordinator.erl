@@ -12,7 +12,7 @@ start() ->
 
 % Starts an accept socket with the given port
 start(Port) ->
-    case gen_tcp:listen(Port, [binary, {packet, 0}, {active, false}]) of
+    case gen_tcp:listen(Port, [binary, {packet, 0}, {active, false}, {buffer, 4096}]) of
         {ok, AcceptSock} -> 
             ?LOG("AcceptSocket generated, ready to listen for new workers on port ~p~n", [Port]),
             CoordinatorPid = spawn(?MODULE, coordinator, [[]]),

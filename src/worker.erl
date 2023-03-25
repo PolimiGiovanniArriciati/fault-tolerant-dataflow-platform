@@ -6,7 +6,7 @@ start() ->
     start("localhost", 8080).
 
 start(Host, Port) ->
-    case gen_tcp:connect(Host, Port, [binary, {packet, 0}, {active, false}]) of
+    case gen_tcp:connect(Host, Port, [binary, {packet, 0}, {active, false}, {buffer, 4096}]) of
         {ok, Sock} ->
             io:format("Worker connected to coordinator~n"),
             ok = gen_tcp:send(Sock, term_to_binary(join)),
