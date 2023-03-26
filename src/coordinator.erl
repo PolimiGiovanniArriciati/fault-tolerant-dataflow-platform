@@ -119,7 +119,8 @@ receive_work(Op, Ops, {PartitionNumber, Data}, CoordinatorPid, CollectorPid) ->
             dispatch_work(Ops, {PartitionNumber, Result}, CoordinatorPid, CollectorPid);
         {error, Error} ->
             ?LOG("Error in coordinator listener ~w~n", [Error]),
-            dispatch_work([Op | Ops], {PartitionNumber, Data}, CoordinatorPid, CollectorPid)
+            CoordinatorPid ! {job, {self(), Op, Data}},
+            receive_work(Op, Ops, {PartitionNumber, Data}, CoordinatorPid, CollectorPid)
     after 3000 ->
         self() ! {error, "Timeout in coordinator listener"}
     end.
