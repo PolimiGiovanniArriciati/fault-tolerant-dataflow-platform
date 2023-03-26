@@ -124,7 +124,9 @@ receive_work(Op, Ops, {PartitionNumber, Data}, CoordinatorPid, CollectorPid) ->
             CoordinatorPid ! {job, {self(), Op, Data}},
             receive_work(Op, Ops, {PartitionNumber, Data}, CoordinatorPid, CollectorPid)
     after 3000 ->
-        self() ! {error, "Timeout in coordinator listener"}
+        self() ! {error, "Timeout in coordinator listener"},
+        CoordinatorPid ! {job, {self(), Op, Data}},
+        receive_work(Op, Ops, {PartitionNumber, Data}, CoordinatorPid, CollectorPid)
     end.
 
 -spec jobs_queue(Workers, DispatchersJobs, FileName) -> Workers when
@@ -139,9 +141,13 @@ jobs_queue([Worker | Workers], [Job | Jobs], FileName) ->
         jobs_queue(Workers, Jobs, FileName);
 
 jobs_queue(Workers, DispatchersJobs, FileName) ->
+    ?LOG("Waiting for a job to be done~n"),
+    ?LOG("Workers, Jobs: ~p~n", [[Workers, DispatchersJobs]]),
     receive
         {job, Job1} ->
-            jobs_queue(Workers, DispatchersJobs ++ [Job1], FileName); %appends the job
+            case lists:member(Job1, DispatchersJobs) of
+                false -> jobs_queue(Workers, DispatchersJobs ++ [Job1], FileName); %appends the job, if not already in the queue, maybe efficented with the use of a set?
+                true -> jobs_queue(Workers, DispatchersJobs, FileName) end; 
         {join, NewWorker} ->
             jobs_queue([NewWorker | Workers], DispatchersJobs, FileName);
         {done_work, Output} ->
@@ -168,9 +174,9 @@ get_results(CoordinatorPid, OutputMap, 0) ->
 get_results(CoordinatorPid, OutputMap, NPartitions) ->
     receive
         {end_dataflow_partition, {PartitionNumber, Output}} ->
+            ?LOG("Received result from partition ~w~n", [PartitionNumber]),
+            ?LOG("OutputMap: ~w~n", [OutputMap]),
             OutputMap1 = maps:put(PartitionNumber, Output, OutputMap),
-            %?LOG("Received result from partition ~w~n", [PartitionNumber]),
-            %?LOG("OutputMap: ~w~n", [OutputMap1]),
             get_results(CoordinatorPid, OutputMap1, NPartitions-1);
         {reduce_prep, Data, DispatcherId} ->
             NewNPartitions = prepare_reduce_input([DispatcherId], Data, NPartitions, 1),
@@ -234,6 +240,7 @@ socket_listener(CoordinatorPid, Sock) ->
                     ?LOG("New worker has joined~n"),
                     CoordinatorPid ! {join, Sock};
                 {result, DispatcherId, Result} ->
+                    ?LOG("Received result for dispatcher ~w result: ~w~n", [DispatcherId, Result]),
                     DispatcherId ! {result, Result},
                     CoordinatorPid ! {join, Sock};
                     % Updates the coordinator about the worker that has finished the job
@@ -245,7 +252,12 @@ socket_listener(CoordinatorPid, Sock) ->
         {error, Error} ->
             ?LOG("Error in coordinator listener ~w~n", [Error]),
             ?LOG("Closing the socket~n"),
-            CoordinatorPid ! {error, Sock, Error}
+            CoordinatorPid ! {error, Sock, Error};
+        % Timeout may happen!
+        Else ->
+            ?LOG("Error in coordinator listener ~w~n", [Else]),
+            ?LOG("Closing the socket~n"),
+            CoordinatorPid ! {error, Sock, Else}
     end.
 
 get_in(String) ->
