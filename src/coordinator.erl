@@ -12,7 +12,7 @@ start() ->
 
 % Starts an accept socket with the given port
 start(Port) ->
-    case gen_tcp:listen(Port, [binary, {packet, 0}, {active, false}, {buffer, 4096}]) of
+    case gen_tcp:listen(Port, [binary, {packet, 0}, {active, false}, {buffer, 16384}]) of
         {ok, AcceptSock} -> 
             ?LOG("AcceptSocket generated, ready to listen for new workers on port ~p~n", [Port]),
             CoordinatorPid = spawn(?MODULE, coordinator, [[]]),
@@ -49,11 +49,15 @@ coordinator(Workers) ->
             ?LOG("No workers available, waiting for new workers to join~n"),
             coordinator(Workers1);
         true ->
-            case io:fread("Coordinator ready, do you want to start executing the tasks in the input file? [y/n]", "~s") of
+            case io:fread("Coordinator ready, do you want to start executing the tasks in the input file? [y/n] [e:exit]", "~s") of
                 {ok, ["y"]} ->
                     start_work(Workers1);
                 {ok, ["n"]} ->
                     coordinator(Workers1);
+                {ok, ["e"]} ->
+                    lists:foreach(fun(Worker) -> gen_tcp:close(Worker) end, Workers1),
+                    io:format("Program ended~n"),
+                    halt();
                 {ok, _} ->
                     ?LOG("Invalid input, please type 'y' or 'n'~n")
             end,

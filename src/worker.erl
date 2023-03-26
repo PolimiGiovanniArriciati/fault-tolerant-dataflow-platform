@@ -6,7 +6,7 @@ start() ->
     start("localhost", 8080).
 
 start(Host, Port) ->
-    case gen_tcp:connect(Host, Port, [binary, {packet, 0}, {active, false}, {buffer, 4096}]) of
+    case gen_tcp:connect(Host, Port, [binary, {packet, 0}, {active, false}, {buffer, 16384}]) of
         {ok, Sock} ->
             io:format("Worker connected to coordinator~n"),
             ok = gen_tcp:send(Sock, term_to_binary(join)),
@@ -30,6 +30,9 @@ worker_routine(Sock) ->
                     io:fwrite("Error: ~w,~n...shutting down the worker", [Error]),
                     halt()
             end;
+        {error, closed} ->
+            io:fwrite("Connection closed,~n...shutting down the worker"),
+            halt();
         {error, Error} ->
             io:fwrite("Error: ~w,~n...shutting down the worker", [Error]),
             halt();
