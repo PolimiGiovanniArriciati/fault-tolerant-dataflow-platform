@@ -15,8 +15,8 @@ start(Port) ->
     case gen_tcp:listen(Port, [binary, {packet, 0}, {active, false}, {buffer, 16384}]) of
         {ok, AcceptSock} -> 
             ?LOG("AcceptSocket generated, ready to listen for new workers on port ~p~n", [Port]),
-            CoordinatorPid = spawn(?MODULE, coordinator, [[]]),
-            accept_connection(CoordinatorPid, AcceptSock);
+            spawn(?MODULE, accept_connection, [self(), AcceptSock]),
+            coordinator([]);
         {error, eaddrinuse} ->
             ?LOG("Port ~p already in use trying next one~n", [Port]),
             start(Port + 1);
@@ -38,9 +38,10 @@ accept_connection(CoordinatorPid, AcceptSock) ->
 coordinator(Workers) ->
     ?LOG("Coordinator waiting for workers"),
     receive
-        % Receives the socket of a new joining worker
         {join, Worker} -> 
-            Workers1 = [Worker | Workers]
+            Workers1 = [Worker | Workers];
+        {start_work, OpFile, DataFile} ->
+            Workers1 = start_work(Workers, OpFile, DataFile)
     after 3000 ->
             ?LOG("no workers joined yet~n"),
             Workers1 = Workers
@@ -134,8 +135,6 @@ jobs_queue([Worker | Workers], [Job | Jobs], FileName) ->
         jobs_queue(Workers, Jobs, FileName);
 
 jobs_queue(Workers, DispatchersJobs, FileName) ->
-    ?LOG("Waiting for a job to be done~n"),
-    ?LOG("Workers, Jobs: ~p~n", [[Workers, DispatchersJobs]]),
     receive
         {job, Job1} ->
             case lists:member(Job1, DispatchersJobs) of
