@@ -1,0 +1,2 @@
+clear;
+erl -pa ebin;

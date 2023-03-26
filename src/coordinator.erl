@@ -1,7 +1,7 @@
 -module('coordinator').
 -export([start/0, start/1]).
 %Functions for internal use not called directly
--export([dispatch_work/4, get_results/3, accept_connection/2, socket_listener/2, jobs_queue/3, coordinator/1]).
+-export([dispatch_work/4, get_results/3, accept_connection/2, socket_listener/2, jobs_queue/4, coordinator/1]).
 -importlib([file_processing, partition]).
 -define(NAME, string:chomp(io:get_line("Input file to process: "))).
 -define(LOG(STRING), io:format("_LOG_ " ++ STRING)).
@@ -75,7 +75,7 @@ start_work(Workers) ->
                 ?LOG("Input: ~p~n", [Inputs]),
                 CollectorPid = spawn(?MODULE, get_results, [self(), #{}, length(Inputs)]),
                 [spawn(?MODULE, dispatch_work, [Ops, Data, self(), CollectorPid]) || Data <- lists:zip(lists:seq(1, length(Inputs)), Inputs)],
-                jobs_queue(Workers, [], FileName);
+                jobs_queue(Workers, [], FileName, #{});
             {error, Reason} ->
                 io:fwrite("An error has occured with the input file reason: ~w , try again ~n", [Reason]),
                 start_work(Workers)
@@ -98,14 +98,24 @@ start_work(Workers) ->
 dispatch_work([], Output, _, CollectorPid) ->
     CollectorPid ! {end_dataflow_partition, Output};
 
-dispatch_work([{reduce, Function, Arg} | Ops], {_, Data}, CoordinatorPid, CollectorPid) ->
-    ?LOG("Dispatching work to the queue~p~n", [reduce]),
+dispatch_work([{reduce, Function, Arg} | Ops], {PartitionNumber, Data}, CoordinatorPid, CollectorPid) ->
+    ?LOG("Dispatching work to the queue: ~p~n", [reduce]),
     CollectorPid ! {reduce_prep, Data, self()},
     receive
         {reduce, [], _} -> not_enough_keys;
-        {reduce, ResultToReduce, PartitionNumber} ->
+        {reduce, ResultToReduce, Partition} ->
             CoordinatorPid ! {job, {self(), {reduce, Function, Arg}, ResultToReduce}},
-            receive_work({reduce, Function, Arg}, Ops, {PartitionNumber, Data}, CoordinatorPid, CollectorPid)
+            receive_work({reduce, Function, Arg}, Ops, {Partition, Data}, CoordinatorPid, CollectorPid);
+        {error, Error} ->
+            ?LOG("RECEIVE_WORK {error, Error} 1 - Error in coordinator listener ~w~n", [Error]),
+            CoordinatorPid ! {job, {self(), {reduce, Function, Arg}, Data}},
+            dispatch_work([{reduce, Function, Arg} | Ops], {PartitionNumber, Data}, CoordinatorPid, CollectorPid);
+        OtherMessage ->
+            ?LOG("RECEIVE_WORK OtherMessage 1 - Unexpected message in coordinator listener ~w~n", [OtherMessage])
+        after 30000 ->
+        io:fwrite("RECEIVE_WORK {error, Error} 1 - Timeout in coordinator listener~n"),
+        self() ! {error, "Timeout in coordinator listener"},
+        dispatch_work([{reduce, Function, Arg} | Ops], {PartitionNumber, Data}, CoordinatorPid, CollectorPid)
     end;
 
 dispatch_work([Op | Ops], {PartitionNumber, Data}, CoordinatorPid, CollectorPid) ->
@@ -116,38 +126,60 @@ dispatch_work([Op | Ops], {PartitionNumber, Data}, CoordinatorPid, CollectorPid)
 receive_work(Op, Ops, {PartitionNumber, Data}, CoordinatorPid, CollectorPid) ->
     receive
         {result, Result} ->
+            ?LOG("RECEIVE_WORK {result, Result}:~w~n", [Result]),
             dispatch_work(Ops, {PartitionNumber, Result}, CoordinatorPid, CollectorPid);
         {error, Error} ->
-            ?LOG("Error in coordinator listener ~w~n", [Error]),
+            ?LOG("RECEIVE_WORK {error, Error} Error in coordinator listener ~w~n", [Error]),
             CoordinatorPid ! {job, {self(), Op, Data}},
-            receive_work(Op, Ops, {PartitionNumber, Data}, CoordinatorPid, CollectorPid)
-    after 3000 ->
-        self() ! {error, "Timeout in coordinator listener"}
+            dispatch_work([Op | Ops], {PartitionNumber, Data}, CoordinatorPid, CollectorPid);
+        OtherMsg ->
+            ?LOG("RECEIVE_WORK Other. Unexpected message in coordinator listener ~w~n", [OtherMsg]),
+            CoordinatorPid ! {job, {self(), Op, Data}},
+            dispatch_work([Op | Ops], {PartitionNumber, Data}, CoordinatorPid, CollectorPid)
+        after 30000 ->
+        io:fwrite("RECEIVE_WORK {error, Error} - Timeout in coordinator listener~n"),
+        self() ! {error, "Timeout in coordinator listener"},
+        dispatch_work([Op | Ops], {PartitionNumber, Data}, CoordinatorPid, CollectorPid)
     end.
 
--spec jobs_queue(Workers, DispatchersJobs, FileName) -> ok when
+-spec jobs_queue(Workers, DispatchersJobs, FileName, BusyMap) -> ok when
+    BusyMap :: #{gen_tcp:socket() => {pid(), Op, Data}},
     Workers :: [pid()],
     DispatchersJobs :: [{pid(), Op, Data}],
     FileName :: string(),
     Op :: {map | reduce | changeKey, atom(), integer()},
     Data :: [{integer(), integer()}].
 
-jobs_queue([Worker | Workers], [Job | Jobs], FileName) ->
-        gen_tcp:send(Worker, term_to_binary({job, Job})),
-        jobs_queue(Workers, Jobs, FileName);
+jobs_queue([Worker | Workers], [Job | Jobs], FileName, BusyMap) ->
+    case gen_tcp:send(Worker, term_to_binary({job, Job})) of
+        ok ->
+            ?LOG("Sent job to worker: ~p~n", [Job]),
+            jobs_queue(Workers, Jobs, FileName, BusyMap#{Worker => Job});
+        {error, Sock, Error} ->
+            ?LOG("Error in coordinator listener of ~w removed from workers because of error: ", [Sock]),
+            ?LOG("~w~n", [Error]),
+            Workers1 = lists:delete(Sock, Workers), 
+            ?LOG("Send error for redispatch work: ~n", [Sock]),
+            jobs_queue(Workers1, [Job | Jobs], FileName, BusyMap);
+        Other -> 
+            ?LOG("Unexpected message waiting in jobs_queue ~w~n", [Other]),
+            jobs_queue([Worker | Workers], [Job | Jobs], FileName, BusyMap)
+    end;
 
-jobs_queue(Workers, DispatchersJobs, FileName) ->
+jobs_queue(Workers, DispatchersJobs, FileName, BusyMap) ->
     receive
         {job, Job1} ->
-            jobs_queue(Workers, DispatchersJobs ++ [Job1], FileName); %appends the job
+            jobs_queue(Workers, DispatchersJobs ++ [Job1], FileName, BusyMap); %appends the job
         {join, NewWorker} ->
-            jobs_queue([NewWorker | Workers], DispatchersJobs, FileName);
+            jobs_queue([NewWorker | Workers], DispatchersJobs, FileName, BusyMap);
         {done_work, Output} ->
             file_processing:save_data(FileName, Output);
         {error, CrushedWorker, Error} ->
             ?LOG("Error in coordinator listener ~w~n", [Error]),
             Workers1 = lists:delete(CrushedWorker, Workers),
-            jobs_queue(Workers1, DispatchersJobs, FileName)
+            OldJob = maps:get(CrushedWorker, BusyMap),
+            ?LOG("Reschedule old job ~w for redispatch work: ~n", [OldJob]),
+            jobs_queue(Workers1, DispatchersJobs++[OldJob], FileName, maps:remove(CrushedWorker, BusyMap))
     end.
 
 -spec get_results(CoordinatorPid, OutputMap, N) -> ok when
@@ -215,7 +247,7 @@ prepare_reduce_input(DispatchersIds, Data, NPartitions, NReceived) when NPartiti
     % Sends each reduced partition to a dispatcher ({{PartitionNumber, Data}, Dispatcher})
     PartitionDataDispatcherList = lists:zip3(lists:seq(1, NPartitions), NewPartitionedList, DispatchersIds),
     ?LOG("PartitionDataDispatcher: ~w~n", [PartitionDataDispatcherList]),
-    [DispatcherId ! {reduce, DataToSend, PartitionNumber} || {PartitionNumber, DataToSend, DispatcherId} <- PartitionDataDispatcherList],
+    lists:foreach(fun({PartitionNumber, DataToSend, DispatcherId}) -> DispatcherId ! {reduce, DataToSend, PartitionNumber} end, PartitionDataDispatcherList),
     % The number of partitions can change if the number of keys is less than the number of partitions
     NewNPartitions.
 
