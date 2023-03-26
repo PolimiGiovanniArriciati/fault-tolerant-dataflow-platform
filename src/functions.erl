@@ -28,12 +28,13 @@ changeKey(Fun, Arg, List) ->
 				end,
 				List).
 
--spec reduce(Fun, Arg, ListKV) -> ListKV when
+-spec reduce(Fun, Arg, ListKVs) -> ListKV when
 	Fun ::  fun((Int, Int) -> Int),
 	Arg :: Int,
-	ListKV :: list({Key, Values}),
+	ListKV :: list({Key, Value}),
+	ListKVs :: list({Key, list(Value)}),
 	Key :: Int,
-	Values :: list(Int).
+	Value :: integer().
 
 reduce(_, _, []) ->
 	[];
