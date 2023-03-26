@@ -51,17 +51,18 @@ coordinator(Workers) ->
         true ->
             case io:fread("Coordinator ready, do you want to start executing the tasks in the input file? [y/n] [e:exit]", "~s") of
                 {ok, ["y"]} ->
-                    start_work(Workers1);
-                {ok, ["n"]} ->
-                    coordinator(Workers1);
+                    Workers2 = start_work(Workers1);
+                {ok, ["n"]} -> Workers2 = Workers1;
                 {ok, ["e"]} ->
                     lists:foreach(fun(Worker) -> gen_tcp:close(Worker) end, Workers1),
                     io:format("Program ended~n"),
+                    Workers2 = Workers1,
                     halt();
                 {ok, _} ->
-                    ?LOG("Invalid input, please type 'y' or 'n'~n")
+                    ?LOG("Invalid input, please type 'y' or 'n'~n"),
+                    Workers2 = Workers1
             end,
-            coordinator(Workers1)
+            coordinator(Workers2)
     end.
 
 start_work(Workers) ->
@@ -116,6 +117,7 @@ dispatch_work([Op | Ops], {PartitionNumber, Data}, CoordinatorPid, CollectorPid)
 receive_work(Op, Ops, {PartitionNumber, Data}, CoordinatorPid, CollectorPid) ->
     receive
         {result, Result} ->
+            ?LOG("Received result from worker: ~p~n", [Result]),
             dispatch_work(Ops, {PartitionNumber, Result}, CoordinatorPid, CollectorPid);
         {error, Error} ->
             ?LOG("Error in coordinator listener ~w~n", [Error]),
@@ -125,7 +127,7 @@ receive_work(Op, Ops, {PartitionNumber, Data}, CoordinatorPid, CollectorPid) ->
         self() ! {error, "Timeout in coordinator listener"}
     end.
 
--spec jobs_queue(Workers, DispatchersJobs, FileName) -> ok when
+-spec jobs_queue(Workers, DispatchersJobs, FileName) -> Workers when
     Workers :: [pid()],
     DispatchersJobs :: [{pid(), Op, Data}],
     FileName :: string(),
@@ -143,7 +145,8 @@ jobs_queue(Workers, DispatchersJobs, FileName) ->
         {join, NewWorker} ->
             jobs_queue([NewWorker | Workers], DispatchersJobs, FileName);
         {done_work, Output} ->
-            file_processing:save_data(FileName, Output);
+            file_processing:save_data(FileName, Output),
+            Workers;
         {error, CrushedWorker, Error} ->
             ?LOG("Error in coordinator listener ~w~n", [Error]),
             Workers1 = lists:delete(CrushedWorker, Workers),
