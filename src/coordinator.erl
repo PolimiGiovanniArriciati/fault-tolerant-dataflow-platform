@@ -66,25 +66,18 @@ coordinator(Workers) ->
     end.
 
 start_work(Workers) ->
-    Operations = get_in("Input operations to execute: "),
-    FileName =get_in("Input file to process: "),
-    case file_processing:get_operations("in/" ++ Operations) of
-        {ok, Npartitions, Ops} ->
-            case file_processing:get_data("in/"++FileName) of
-                {ok, InputList} ->
-                Inputs = partition:partition(InputList, Npartitions),
-                ?LOG("Input: ~p~n", [Inputs]),
-                CollectorPid = spawn(?MODULE, get_results, [self(), #{}, length(Inputs)]),
-                [spawn(?MODULE, dispatch_work, [Ops, Data, self(), CollectorPid]) || Data <- lists:zip(lists:seq(1, length(Inputs)), Inputs)],
-                jobs_queue(Workers, [], FileName);
-            {error, Reason} ->
-                io:fwrite("An error has occured with the input file reason: ~w , try again ~n", [Reason]),
-                start_work(Workers)
-            end;
-        {error, Reason} ->
-            io:fwrite("An error has occured with the operation reason: ~w , try again ~n", [Reason]),
-            start_work(Workers)
-    end.
+    OpFile = get_in("Input operations to execute: "),
+    DataFile = get_in("Input file to process: "),
+    start_work(Workers, OpFile, DataFile).
+    
+start_work(Workers, OpFile, DataFile) ->
+    {ok, _, Npartitions, Ops} = file_processing:get_operations(OpFile),
+    {ok, DataFileName, InputList} = file_processing:get_data(DataFile),
+    Inputs = partition:partition(InputList, Npartitions),
+    ?LOG("Input: ~p~n", [Inputs]),
+    CollectorPid = spawn(?MODULE, get_results, [self(), #{}, length(Inputs)]),
+    [spawn(?MODULE, dispatch_work, [Ops, Data, self(), CollectorPid]) || Data <- lists:zip(lists:seq(1, length(Inputs)), Inputs)],
+    jobs_queue(Workers, [], DataFileName).
 
 -spec dispatch_work(Ops, Input, CoordinatorPid, CollectorPid) -> ok when
     Ops :: [{Op, Function, integer()}],
