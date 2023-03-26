@@ -51,17 +51,20 @@ coordinator(Workers) ->
         true ->
             case io:fread("Coordinator ready, do you want to start executing the tasks in the input file? [y/n] [e:exit]", "~s") of
                 {ok, ["y"]} ->
-                    start_work(Workers1);
+                    NewWorkers = start_work(Workers1);
                 {ok, ["n"]} ->
-                    coordinator(Workers1);
+                    NewWorkers = Workers1,
+                    ?LOG("Coordinator waiting for new workers to join~n");
                 {ok, ["e"]} ->
+                    NewWorkers = Workers1,
                     lists:foreach(fun(Worker) -> gen_tcp:close(Worker) end, Workers1),
                     io:format("Program ended~n"),
                     halt();
                 {ok, _} ->
+                    NewWorkers = Workers1,
                     ?LOG("Invalid input, please type 'y' or 'n'~n")
             end,
-            coordinator(Workers1)
+            coordinator(NewWorkers)
     end.
 
 start_work(Workers) ->
@@ -75,15 +78,20 @@ start_work(Workers) ->
                 ?LOG("Input: ~p~n", [Inputs]),
                 CollectorPid = spawn(?MODULE, get_results, [self(), #{}, length(Inputs)]),
                 [spawn(?MODULE, dispatch_work, [Ops, Data, self(), CollectorPid]) || Data <- lists:zip(lists:seq(1, length(Inputs)), Inputs)],
-                jobs_queue(Workers, [], FileName, #{});
+                NewWorkers = Workers ++ jobs_queue(Workers, [], FileName, #{});
             {error, Reason} ->
                 io:fwrite("An error has occured with the input file reason: ~w , try again ~n", [Reason]),
-                start_work(Workers)
+                NewWorkers = Workers ++ start_work(Workers)
             end;
         {error, Reason} ->
             io:fwrite("An error has occured with the operation reason: ~w , try again ~n", [Reason]),
-            start_work(Workers)
-    end.
+            NewWorkers = start_work(Workers);
+        Other ->
+            io:fwrite("An error has occured with the operation reason: ~w , try again ~n", [Other]),
+            NewWorkers = Workers ++ start_work(Workers) 
+        end, 
+    ?LOG("NewWorkers: ~p~n", [NewWorkers]),
+    NewWorkers.
 
 -spec dispatch_work(Ops, Input, CoordinatorPid, CollectorPid) -> ok when
     Ops :: [{Op, Function, integer()}],
@@ -161,7 +169,10 @@ jobs_queue([Worker | Workers], [Job | Jobs], FileName, BusyMap) ->
             Workers1 = lists:delete(Sock, Workers), 
             ?LOG("Send error for redispatch work: ~n", [Sock]),
             jobs_queue(Workers1, [Job | Jobs], FileName, BusyMap);
-        Other -> 
+        {error, enotconn} ->
+            ?LOG("Error removed ~w from workers because of error enotconn~n", [Worker]),
+            jobs_queue(Workers, [Job | Jobs], FileName, BusyMap);
+        Other ->
             ?LOG("Unexpected message waiting in jobs_queue ~w~n", [Other]),
             jobs_queue([Worker | Workers], [Job | Jobs], FileName, BusyMap)
     end;
@@ -173,7 +184,8 @@ jobs_queue(Workers, DispatchersJobs, FileName, BusyMap) ->
         {join, NewWorker} ->
             jobs_queue([NewWorker | Workers], DispatchersJobs, FileName, BusyMap);
         {done_work, Output} ->
-            file_processing:save_data(FileName, Output);
+            file_processing:save_data(FileName, Output),
+            Workers;
         {error, CrushedWorker, Error} ->
             ?LOG("Error in coordinator listener ~w~n", [Error]),
             Workers1 = lists:delete(CrushedWorker, Workers),
@@ -263,13 +275,13 @@ socket_listener(CoordinatorPid, Sock) ->
                     ?LOG("New worker has joined~n"),
                     CoordinatorPid ! {join, Sock};
                 {result, DispatcherId, Result} ->
-                    DispatcherId ! {result, Result},
-                    CoordinatorPid ! {join, Sock};
+                    CoordinatorPid ! {join, Sock},
+                    DispatcherId ! {result, Result};
                     % Updates the coordinator about the worker that has finished the job
                 Error ->
                     ?LOG("Error in socket listener, unexpected message:~n~w~n", [Error]),
                     CoordinatorPid ! {error, Sock, Error}
-            end,
+                end,
             socket_listener(CoordinatorPid, Sock);
         {error, Error} ->
             ?LOG("Error in coordinator listener ~w~n", [Error]),
