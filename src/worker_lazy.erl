@@ -1,4 +1,4 @@
--module(worker).
+-module(worker_lazy).
 -export([start/0, start/1, start/2]).
 -importlib([functions]).
 
@@ -23,13 +23,18 @@ worker_routine(Sock) ->
     case gen_tcp:recv(Sock, 0) of
         {ok, Msg} ->
             {job, {CallerPid, {Operation, Function, Args}, Data}} = binary_to_term(Msg),
-            io:format("Worker received job: ~w~n", [[Operation, Function, Args, Data]]),
+            io:format("Worker received job: ~w~n", [Operation]),
+            io:format("Worker received job: ~p~n", [[Function, Args, Data]]),
             Result = erlang:apply(functions, Operation, [Function, Args, Data]),
+            timer:sleep(2000), % Simulate a long running task
             case gen_tcp:send(Sock, term_to_binary({result, CallerPid, Result})) of
                 ok ->
                     worker_routine(Sock);
                 {error, Error} ->
                     io:fwrite("Error: ~w,~n...shutting down the worker", [Error]),
+                    halt();
+                Error ->
+                    io:format("Unexpected message: ~w~n", [Error]),
                     halt()
             end;
         {error, closed} ->

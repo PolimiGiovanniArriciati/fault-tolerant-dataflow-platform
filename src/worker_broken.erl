@@ -1,4 +1,4 @@
--module(worker).
+-module(worker_broken).
 -export([start/0, start/1, start/2]).
 -importlib([functions]).
 
@@ -21,17 +21,7 @@ start(Host, Port) ->
 % Worker routine, up to now just a stub to handle messaging with the coordinator
 worker_routine(Sock) ->
     case gen_tcp:recv(Sock, 0) of
-        {ok, Msg} ->
-            {job, {CallerPid, {Operation, Function, Args}, Data}} = binary_to_term(Msg),
-            io:format("Worker received job: ~w~n", [[Operation, Function, Args, Data]]),
-            Result = erlang:apply(functions, Operation, [Function, Args, Data]),
-            case gen_tcp:send(Sock, term_to_binary({result, CallerPid, Result})) of
-                ok ->
-                    worker_routine(Sock);
-                {error, Error} ->
-                    io:fwrite("Error: ~w,~n...shutting down the worker", [Error]),
-                    halt()
-            end;
+        {ok, _} -> marameo;
         {error, closed} ->
             io:fwrite("Connection closed,~n...shutting down the worker"),
             halt();
