@@ -98,7 +98,7 @@ dispatch_work([{reduce, Function, Arg} | Ops], {_, Data}, CoordinatorPid, Collec
     CollectorPid ! {reduce_prep, Data, self()},
     receive
         {reduce, [], _} -> not_enough_keys;
-        {reduce, ResultToReduce, Partition} ->
+        {reduce, ResultToReduce, PartitionNumber} ->
             CoordinatorPid ! {job, {self(), {reduce, Function, Arg}, ResultToReduce}},
             receive_work({reduce, Function, Arg}, Ops, {PartitionNumber, Data}, CoordinatorPid, CollectorPid)
     end;
@@ -153,7 +153,6 @@ jobs_queue(Workers, DispatchersJobs, FileName, BusyMap) ->
                 false -> jobs_queue(Workers, DispatchersJobs ++ [Job1], FileName, BusyMap); %appends the job, if not already in the queue, maybe efficented with the use of a set?
                 true -> jobs_queue(Workers, DispatchersJobs, FileName, BusyMap) end; 
         {join, NewWorker} ->
-            jobs_queue([NewWorker | Workers], DispatchersJobs, FileName, BusyMap);
             jobs_queue([NewWorker | Workers], DispatchersJobs, FileName, BusyMap);
         {done_work, Output} ->
             file_processing:save_data(FileName, Output),
