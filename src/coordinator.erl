@@ -5,7 +5,7 @@
 -importlib([file_processing, partition]).
 -define(NAME, string:chomp(io:get_line("Input file to process: "))).
 -define(LOG(STRING), io:format("_LOG_ " ++ STRING)).
--define(LOG(STRING, ARGS), io:format("_LOG_ " ++ STRING, ARGS)).
+-define(LOG(STRING, ARGS), io:format("_LOG_ function: ~p; line: ~p " ++ STRING, [?FUNCTION_NAME, ?LINE] ++ ARGS)).
 
 start() ->
     start(8080).
@@ -36,7 +36,7 @@ accept_connection(CoordinatorPid, AcceptSock) ->
 
 % Coordinator has parameter R : ready workers (a list) and B: busy
 coordinator(Workers) ->
-    ?LOG("Coordinator waiting for workers"),
+    ?LOG("Coordinator waiting for workers~n"),
     receive
         {join, Worker} -> 
             Workers1 = [Worker | Workers];
@@ -242,19 +242,19 @@ prepare_reduce_input(DispatchersIds, Data, NPartitions, NReceived) when NPartiti
 % waits to receive messages and passes them
 % to the dispatcher
 socket_listener(CoordinatorPid, Sock) ->
-    case gen_tcp:recv(Sock, 0) of
+    case gen_tcp:recv(Sock, 0, 5000) of
         {ok, Msg} ->
             case binary_to_term(Msg) of 
                 join -> 
                     ?LOG("New worker has joined~n"),
                     CoordinatorPid ! {join, Sock};
+                ping -> ?LOG("Ping received from socket ~p~n", [Sock]);
                 {result, DispatcherId, Counter, Result} ->
-                    CoordinatorPid ! {join, Sock},
                     ?LOG("Received result for dispatcher ~w with counter: ~w and result: ~w~n", [DispatcherId, Counter, Result]),
-                    DispatcherId ! {result, Counter, Result};
-                    % Updates the coordinator about the worker that has finished the job
+                    CoordinatorPid ! {join, Sock},
+                    DispatcherId   ! {result, Counter, Result};
                 Error ->
-                    ?LOG("Error in socket listener, unexpected message:~n~w~n", [Error]),
+                    ?LOG("Error in socket listener, unexpected message: ~w~n", [Error]),
                     CoordinatorPid ! {error, Sock, Error},
                     halt()
                 end,
@@ -263,7 +263,6 @@ socket_listener(CoordinatorPid, Sock) ->
             ?LOG("Socket listener: ~w~n", [Error]),
             ?LOG("Closing the socket~n"),
             CoordinatorPid ! {error, Sock, Error};
-        % Timeout may happen!
         Else ->
             ?LOG("Socket listener: Error in coordinator listener ~w~n", [Else]),
             ?LOG("Closing the socket~n"),

@@ -1,5 +1,5 @@
 -module(worker).
--export([start/0, start/1, start/2]).
+-export([start/0, start/1, start/2, ping/2]).
 -importlib([functions]).
 
 start() ->
@@ -13,6 +13,7 @@ start(Host, Port) ->
         {ok, Sock} ->
             io:format("Worker connected to coordinator~n"),
             ok = gen_tcp:send(Sock, term_to_binary(join)),
+            _ = spawn_link(?MODULE, ping, [Sock, 3000]),
             worker_routine(Sock);
         {error, Error} ->
             io:format("Worker could not connect to coordinator ~w~n", [Error])
@@ -38,8 +39,27 @@ worker_routine(Sock) ->
         {error, Error} ->
             io:fwrite("Error: ~w,~n...shutting down the worker", [Error]),
             halt();
+        ping ->
+            io:format("Worker received ping~n"),
+            case gen_tcp:send(Sock, term_to_binary(ping)) of
+                ok ->
+                    worker_routine(Sock);
+                {error, Error} ->
+                    io:fwrite("Error: ~w,~n...shutting down the worker", [Error]),
+                    halt()
+            end;
         Error ->
             io:format("Unexpected message: ~w~n", [Error]),
             halt()
     end,
     worker_routine(Sock).
+
+ping(Sock, Interval) ->
+    timer:sleep(Interval),
+    case gen_tcp:send(Sock, term_to_binary(ping)) of
+        ok ->
+            ping(Sock, Interval);
+        {error, Error} ->
+            io:fwrite("Error: ~w,~n...shutting down the worker", [Error]),
+            halt()
+    end.
