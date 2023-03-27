@@ -9,7 +9,7 @@ start(Port) ->
     start("localhost", Port).
 
 start(Host, Port) ->
-    case gen_tcp:connect(Host, Port, [binary, {packet, 0}, {active, false}, {buffer, 16384}]) of
+    case gen_tcp:connect(Host, Port, [binary, {packet, 0}, {active, false}, {buffer, 16384}, {send_timeout, 10000}, {send_timeout_close, true}], 10000) of
         {ok, Sock} ->
             io:format("Worker connected to coordinator~n"),
             ok = gen_tcp:send(Sock, term_to_binary(join)),
@@ -57,5 +57,7 @@ ping(Sock, Interval) ->
             ping(Sock, Interval);
         {error, Error} ->
             io:fwrite("Error: ~w,~n...shutting down the worker", [Error]),
-            halt()
+            halt();
+        Unknown ->
+            io:fwrite("unknown message ~w ~n", [Unknown])
     end.

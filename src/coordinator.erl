@@ -154,7 +154,7 @@ jobs_queue(Workers, DispatchersJobs, FileName, BusyMap) ->
                 false -> jobs_queue(Workers, DispatchersJobs ++ [Job1], FileName, BusyMap); %appends the job, if not already in the queue, maybe efficented with the use of a set?
                 true -> jobs_queue(Workers, DispatchersJobs, FileName, BusyMap) end; 
         {join, NewWorker} ->
-            jobs_queue([NewWorker | Workers], DispatchersJobs, FileName, BusyMap);
+            jobs_queue([NewWorker | Workers], DispatchersJobs, FileName, maps:remove(NewWorker, BusyMap));
         {done_work, Output} ->
             file_processing:save_data(FileName, Output),
             Workers;
@@ -162,8 +162,7 @@ jobs_queue(Workers, DispatchersJobs, FileName, BusyMap) ->
             ?LOG("JOBS QUEUE - Error in coordinator listener ~w~n", [Error]),
             Workers1 = lists:delete(CrushedWorker, Workers),
             case maps:find(CrushedWorker, BusyMap) of
-                ok ->
-                    OldJob = maps:get(CrushedWorker, BusyMap),
+                {ok, OldJob}  ->
                     ?LOG("Reschedule old job ~w for redispatch work: ~n", [OldJob]),
                     jobs_queue(Workers1, [OldJob] ++ DispatchersJobs, FileName, maps:remove(CrushedWorker, BusyMap));
                 _ ->
