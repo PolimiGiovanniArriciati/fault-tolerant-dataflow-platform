@@ -30,6 +30,7 @@ accept_connection(CoordinatorPid, AcceptSock) ->
             ?LOG("Coordinator accepted a new connection~n"),
             spawn(?MODULE, socket_listener, [CoordinatorPid, Sock]);
         {error, Error} ->
+            timer:sleep(1000),
             ?LOG("Unexpected error during socket accept!! ~w~n", [Error])
     end,
     accept_connection(CoordinatorPid, AcceptSock).
@@ -158,6 +159,14 @@ jobs_queue(Workers, DispatchersJobs, FileName, BusyMap) ->
         {done_work, Output} ->
             file_processing:save_data(FileName, Output),
             Workers;
+        {worker_resend, Worker} ->
+            case maps:find(Worker, BusyMap) of
+                {ok, OldJob}  ->
+                    ?LOG("Reschedule old job ~w for redispatch work: ~n", [OldJob]),
+                    jobs_queue([Worker | Workers], [OldJob] ++ DispatchersJobs, FileName, maps:remove(Worker, BusyMap));
+                _ ->
+                    jobs_queue([Worker | Workers], DispatchersJobs, FileName, BusyMap)
+            end;
         {error, CrushedWorker, Error} ->
             ?LOG("JOBS QUEUE - Error in coordinator listener ~w~n", [Error]),
             Workers1 = lists:delete(CrushedWorker, Workers),
@@ -252,6 +261,9 @@ socket_listener(CoordinatorPid, Sock) ->
                     ?LOG("Received result for dispatcher ~w with counter: ~w and result: ~w~n", [DispatcherId, Counter, Result]),
                     CoordinatorPid ! {join, Sock},
                     DispatcherId   ! {result, Counter, Result};
+                worker_resend ->
+                    ?LOG("Received job resend from socket ~p~n", [Sock]),
+                    CoordinatorPid ! {worker_resend, Sock};
                 Error ->
                     ?LOG("Error in socket listener, unexpected message: ~w~n", [Error]),
                     CoordinatorPid ! {error, Sock, Error},
