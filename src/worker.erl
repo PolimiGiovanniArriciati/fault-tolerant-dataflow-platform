@@ -1,5 +1,5 @@
 -module(worker).
--export([start/0, start/1, start/2, ping/2]).
+-export([start/0, start/1, start/2, ping/2, try_execute_job/2]).
 -importlib([functions]).
 
 start() ->
@@ -19,7 +19,6 @@ start(Host, Port) ->
             io:format("Worker could not connect to coordinator ~w~n", [Error])
     end.
     
-% Worker routine, up to now just a stub to handle messaging with the coordinator
 worker_routine(Sock) ->
     case gen_tcp:recv(Sock, 0) of
         {ok, Msg} ->

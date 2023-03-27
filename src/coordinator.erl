@@ -4,8 +4,10 @@
 -export([dispatch_work/5, get_results/3, accept_connection/2, socket_listener/2, jobs_queue/4, coordinator/1]).
 -importlib([file_processing, partition]).
 -define(NAME, string:chomp(io:get_line("Input file to process: "))).
--define(LOG(STRING), io:format("_LOG_ " ++ STRING)).
--define(LOG(STRING, ARGS), io:format("_LOG_ function: ~p; line: ~p " ++ STRING, [?FUNCTION_NAME, ?LINE] ++ ARGS)).
+-define(LOG(STRING), io:format("__LOG__ " ++ STRING)).
+-define(LOG(STRING, ARGS), io:format("__LOG__ function: ~p; line: ~p " ++ STRING, [?FUNCTION_NAME, ?LINE] ++ ARGS)).
+-define(DEBUG(STRING, ARGS), ok).
+                            %io:format("_DEBUG_ function: ~p; line: ~p " ++ STRING, [?FUNCTION_NAME, ?LINE] ++ ARGS)).
 
 start() ->
     start(8080).
@@ -37,7 +39,7 @@ accept_connection(CoordinatorPid, AcceptSock) ->
 
 % Coordinator has parameter R : ready workers (a list) and B: busy
 coordinator(Workers) ->
-    ?LOG("Coordinator waiting for workers~n"),
+    ?DEBUG("Coordinator waiting for workers ~p~n", [Workers]),
     receive
         {join, Worker} -> 
             Workers1 = [Worker | Workers];
@@ -115,10 +117,10 @@ dispatch_work([Op | Ops], {PartitionNumber, Data}, CoordinatorPid, CollectorPid,
 receive_work(Op, Ops, {PartitionNumber, Data}, CoordinatorPid, CollectorPid, OperationCounter) ->
     receive
         {result, ResOperationCounter, Result} when OperationCounter == ResOperationCounter->
-            ?LOG("RECEIVE_WORK {result, Result}:~w~n", [Result]),
+            ?DEBUG("RECEIVE_WORK {result, Result}:~w~n", [Result]),
             dispatch_work(Ops, {PartitionNumber, Result}, CoordinatorPid, CollectorPid, OperationCounter+1);
         {error, Error} ->
-            ?LOG("RECEIVE_WORK {error, Error} Error in coordinator listener ~w~n", [Error]),
+            ?DEBUG("RECEIVE_WORK {error, Error} Error in coordinator listener ~w~n", [Error]),
             CoordinatorPid ! {job, {self(), OperationCounter, Op, Data}}, % Send with high priority this task to remaining workers
             receive_work(Op, Ops, {PartitionNumber, Data}, CoordinatorPid, CollectorPid, OperationCounter);
         OtherMsg ->
@@ -150,10 +152,10 @@ jobs_queue([Worker | Workers], [Job | Jobs], FileName, BusyMap) ->
 jobs_queue(Workers, DispatchersJobs, FileName, BusyMap) ->
     receive
         {job, Job1} ->
-            %TODO: check if the job is already in the queue or in the dispatched map
-            case lists:member(Job1, DispatchersJobs) andalso lists:member(Job1, maps:values(BusyMap)) of
-                false -> jobs_queue(Workers, DispatchersJobs ++ [Job1], FileName, BusyMap); %appends the job, if not already in the queue, maybe efficented with the use of a set?
-                true -> jobs_queue(Workers, DispatchersJobs, FileName, BusyMap) end; 
+            ?LOG("Received job from coordinator: ~p~n", [Job1]),
+            case not lists:member(Job1, DispatchersJobs) andalso not lists:member(Job1, maps:values(BusyMap)) of
+                true -> jobs_queue(Workers, DispatchersJobs ++ [Job1], FileName, BusyMap);
+                false -> jobs_queue(Workers, DispatchersJobs, FileName, BusyMap) end;
         {join, NewWorker} ->
             jobs_queue([NewWorker | Workers], DispatchersJobs, FileName, maps:remove(NewWorker, BusyMap));
         {done_work, Output} ->
@@ -199,8 +201,7 @@ get_results(CoordinatorPid, OutputMap, NPartitions) ->
             get_results(CoordinatorPid, OutputMap1, NPartitions-1);
         {reduce_prep, Data, DispatcherId} ->
             NewNPartitions = prepare_reduce_input([DispatcherId], Data, NPartitions, 1),
-            ?LOG("Number of partitions: ~p became ~p ~n", [NPartitions, NewNPartitions]),
-            if NPartitions =/= NewNPartitions -> ?LOG("Changed number of partitions: ~p became ~p ~n", [NPartitions, NewNPartitions]); true -> ok end,
+            if NPartitions =/= NewNPartitions -> ?DEBUG("Changed number of partitions: ~p became ~p ~n", [NPartitions, NewNPartitions]); true -> ok end,
             get_results(CoordinatorPid, #{}, NewNPartitions)
     end.
 
@@ -218,7 +219,7 @@ prepare_reduce_input(DispatcherIds, Datas, NPartitions, NReceived) when NPartiti
 
 prepare_reduce_input(DispatchersIds, Data, NPartitions, NReceived) when NPartitions == NReceived -> 
     % Reduce all the partitions into a list {Key, ListOfValues} and then re-partition it
-    % It's needed because the keys may be distributed in more partition
+    % It's needed because the keys may be distributed across more partition
     ?LOG("Ready to transform input ~w for reduce~n", [Data]),
     MapReduce = lists:foldl(
                 fun({Key, Value}, Acc) ->
@@ -236,13 +237,11 @@ prepare_reduce_input(DispatchersIds, Data, NPartitions, NReceived) when NPartiti
     NKeys = erlang:length(ListReduce),
     NewNPartitions = erlang:min(NKeys, NPartitions),
     NewPartitionedList = partition:partition(ListReduce, NPartitions) ++
-    if NKeys < NPartitions ->  lists:duplicate(NPartitions - NKeys, []);
-        true -> [] end,
-    % Sends each reduced partition to a dispatcher ({{PartitionNumber, Data}, Dispatcher})
+        if  NKeys < NPartitions -> lists:duplicate(NPartitions - NKeys, []);
+            true -> [] end,
+    % Sends each reduced partition to a dispatcher ({PartitionNumber, Data, Dispatcher})
     PartitionDataDispatcherList = lists:zip3(lists:seq(1, NPartitions), NewPartitionedList, DispatchersIds),
-    ?LOG("PartitionDataDispatcher: ~w~n", [PartitionDataDispatcherList]),
     lists:foreach(fun({PartitionNumber, DataToSend, DispatcherId}) -> DispatcherId ! {reduce, DataToSend, PartitionNumber} end, PartitionDataDispatcherList),
-    % The number of partitions can change if the number of keys is less than the number of partitions
     NewNPartitions.
 
 % Manages the communication with the worker
@@ -256,24 +255,20 @@ socket_listener(CoordinatorPid, Sock) ->
                 join -> 
                     ?LOG("New worker has joined~n"),
                     CoordinatorPid ! {join, Sock};
-                ping -> ?LOG("Ping received from socket ~p~n", [Sock]);
+                ping -> ?DEBUG("Ping received from socket ~p~n", [Sock]);
                 {result, DispatcherId, Counter, Result} ->
-                    ?LOG("Received result for dispatcher ~w with counter: ~w and result: ~w~n", [DispatcherId, Counter, Result]),
+                    ?DEBUG("Received result for dispatcher ~w with counter: ~w and result: ~w~n", [DispatcherId, Counter, Result]),
                     CoordinatorPid ! {join, Sock},
                     DispatcherId   ! {result, Counter, Result};
                 worker_resend ->
-                    ?LOG("Received job resend from socket ~p~n", [Sock]),
+                    ?DEBUG("Received job resend from socket ~p~n", [Sock]),
                     CoordinatorPid ! {worker_resend, Sock};
                 Error ->
-                    ?LOG("Error in socket listener, unexpected message: ~w~n", [Error]),
+                    ?DEBUG("Error in socket listener, unexpected message: ~w~n", [Error]),
                     CoordinatorPid ! {error, Sock, Error},
                     halt()
                 end,
             socket_listener(CoordinatorPid, Sock);
-        {error, Error} ->
-            ?LOG("Socket listener: ~w~n", [Error]),
-            ?LOG("Closing the socket~n"),
-            CoordinatorPid ! {error, Sock, Error};
         Else ->
             ?LOG("Socket listener: Error in coordinator listener ~w~n", [Else]),
             ?LOG("Closing the socket~n"),

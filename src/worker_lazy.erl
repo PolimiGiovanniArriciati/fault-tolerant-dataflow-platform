@@ -19,7 +19,6 @@ start(Host, Port) ->
             io:format("Worker could not connect to coordinator ~w~n", [Error])
     end.
     
-% Worker routine, up to now just a stub to handle messaging with the coordinator
 worker_routine(Sock) ->
     case gen_tcp:recv(Sock, 0) of
         {ok, Msg} ->
