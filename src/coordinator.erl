@@ -94,13 +94,13 @@ dispatch_work([], Output, _, CollectorPid) ->
     CollectorPid ! {end_dataflow_partition, Output};
 
 dispatch_work([{reduce, Function, Arg} | Ops], {_, Data}, CoordinatorPid, CollectorPid) ->
-    ?LOG("Dispatching work to the queue: ~p~n", [reduce]),
+    ?LOG("Dispatching work to the queue~p~n", [reduce]),
     CollectorPid ! {reduce_prep, Data, self()},
     receive
         {reduce, [], _} -> not_enough_keys;
         {reduce, ResultToReduce, Partition} ->
             CoordinatorPid ! {job, {self(), {reduce, Function, Arg}, ResultToReduce}},
-            receive_work({reduce, Function, Arg}, Ops, {Partition, Data}, CoordinatorPid, CollectorPid)
+            receive_work({reduce, Function, Arg}, Ops, {PartitionNumber, Data}, CoordinatorPid, CollectorPid)
     end;
 
 dispatch_work([Op | Ops], {PartitionNumber, Data}, CoordinatorPid, CollectorPid) ->
@@ -111,10 +111,14 @@ dispatch_work([Op | Ops], {PartitionNumber, Data}, CoordinatorPid, CollectorPid)
 receive_work(Op, Ops, {PartitionNumber, Data}, CoordinatorPid, CollectorPid) ->
     receive
         {result, Result} ->
-            ?LOG("Received result from worker: ~p~n", [Result]),
+            ?LOG("RECEIVE_WORK {result, Result}:~w~n", [Result]),
             dispatch_work(Ops, {PartitionNumber, Result}, CoordinatorPid, CollectorPid);
         {error, Error} ->
-            ?LOG("Error in coordinator listener ~w~n", [Error]),
+            ?LOG("RECEIVE_WORK {error, Error} Error in coordinator listener ~w~n", [Error]),
+            CoordinatorPid ! {job, {self(), Op, Data}},
+            dispatch_work([Op | Ops], {PartitionNumber, Data}, CoordinatorPid, CollectorPid);
+        OtherMsg ->
+            ?LOG("RECEIVE_WORK Other. Unexpected message in coordinator listener ~w~n", [OtherMsg]),
             CoordinatorPid ! {job, {self(), Op, Data}},
             receive_work(Op, Ops, {PartitionNumber, Data}, CoordinatorPid, CollectorPid)
     after 3000 ->
@@ -149,6 +153,7 @@ jobs_queue(Workers, DispatchersJobs, FileName, BusyMap) ->
                 false -> jobs_queue(Workers, DispatchersJobs ++ [Job1], FileName, BusyMap); %appends the job, if not already in the queue, maybe efficented with the use of a set?
                 true -> jobs_queue(Workers, DispatchersJobs, FileName, BusyMap) end; 
         {join, NewWorker} ->
+            jobs_queue([NewWorker | Workers], DispatchersJobs, FileName, BusyMap);
             jobs_queue([NewWorker | Workers], DispatchersJobs, FileName, BusyMap);
         {done_work, Output} ->
             file_processing:save_data(FileName, Output),
@@ -223,7 +228,7 @@ prepare_reduce_input(DispatchersIds, Data, NPartitions, NReceived) when NPartiti
     % Sends each reduced partition to a dispatcher ({{PartitionNumber, Data}, Dispatcher})
     PartitionDataDispatcherList = lists:zip3(lists:seq(1, NPartitions), NewPartitionedList, DispatchersIds),
     ?LOG("PartitionDataDispatcher: ~w~n", [PartitionDataDispatcherList]),
-    [DispatcherId ! {reduce, DataToSend, PartitionNumber} || {PartitionNumber, DataToSend, DispatcherId} <- PartitionDataDispatcherList],
+    lists:foreach(fun({PartitionNumber, DataToSend, DispatcherId}) -> DispatcherId ! {reduce, DataToSend, PartitionNumber} end, PartitionDataDispatcherList),
     % The number of partitions can change if the number of keys is less than the number of partitions
     NewNPartitions.
 
@@ -239,14 +244,14 @@ socket_listener(CoordinatorPid, Sock) ->
                     ?LOG("New worker has joined~n"),
                     CoordinatorPid ! {join, Sock};
                 {result, DispatcherId, Result} ->
+                    CoordinatorPid ! {join, Sock},
                     ?LOG("Received result for dispatcher ~w result: ~w~n", [DispatcherId, Result]),
-                    DispatcherId ! {result, Result},
-                    CoordinatorPid ! {join, Sock};
+                    DispatcherId ! {result, Result};
                     % Updates the coordinator about the worker that has finished the job
                 Error ->
                     ?LOG("Error in socket listener, unexpected message:~n~w~n", [Error]),
                     CoordinatorPid ! {error, Sock, Error}
-            end,
+                end,
             socket_listener(CoordinatorPid, Sock);
         {error, Error} ->
             ?LOG("Error in coordinator listener ~w~n", [Error]),
