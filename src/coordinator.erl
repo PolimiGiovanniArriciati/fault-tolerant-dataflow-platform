@@ -51,25 +51,26 @@ coordinator(Workers) ->
         true ->
             case io:fread("Coordinator ready, do you want to start executing the tasks in the input file? [y/n] [e:exit]", "~s") of
                 {ok, ["y"]} ->
-                    NewWorkers = start_work(Workers1);
+                    Workers2 = start_work(Workers1);
                 {ok, ["n"]} ->
-                    NewWorkers = Workers1,
+                    Workers2 = Workers1,
                     ?LOG("Coordinator waiting for new workers to join~n");
                 {ok, ["e"]} ->
-                    NewWorkers = Workers1,
+                    Workers2 = Workers1,
                     lists:foreach(fun(Worker) -> gen_tcp:close(Worker) end, Workers1),
                     io:format("Program ended~n"),
                     halt();
                 {ok, _} ->
-                    NewWorkers = Workers1,
+                    Workers2 = Workers1,
                     ?LOG("Invalid input, please type 'y' or 'n'~n")
             end,
-            coordinator(NewWorkers)
+            coordinator(Workers2)
     end.
 
 start_work(Workers) ->
+    ?LOG("Workers: ~p~n", [Workers]),
     Operations = get_in("Input operations to execute: "),
-    FileName =get_in("Input file to process: "),
+    FileName = get_in("Input file to process: "),
     case file_processing:get_operations("in/" ++ Operations) of
         {ok, Npartitions, Ops} ->
             case file_processing:get_data("in/"++FileName) of
@@ -78,20 +79,18 @@ start_work(Workers) ->
                 ?LOG("Input: ~p~n", [Inputs]),
                 CollectorPid = spawn(?MODULE, get_results, [self(), #{}, length(Inputs)]),
                 [spawn(?MODULE, dispatch_work, [Ops, Data, self(), CollectorPid]) || Data <- lists:zip(lists:seq(1, length(Inputs)), Inputs)],
-                NewWorkers = Workers ++ jobs_queue(Workers, [], FileName, #{});
+                Workers ++ jobs_queue(Workers, [], FileName, #{});
             {error, Reason} ->
                 io:fwrite("An error has occured with the input file reason: ~w , try again ~n", [Reason]),
-                NewWorkers = Workers ++ start_work(Workers)
+                Workers ++ start_work(Workers)
             end;
         {error, Reason} ->
             io:fwrite("An error has occured with the operation reason: ~w , try again ~n", [Reason]),
-            NewWorkers = start_work(Workers);
+            start_work(Workers);
         Other ->
             io:fwrite("An error has occured with the operation reason: ~w , try again ~n", [Other]),
-            NewWorkers = Workers ++ start_work(Workers) 
-        end, 
-    ?LOG("NewWorkers: ~p~n", [NewWorkers]),
-    NewWorkers.
+            Workers ++ start_work(Workers) 
+        end. 
 
 -spec dispatch_work(Ops, Input, CoordinatorPid, CollectorPid) -> ok when
     Ops :: [{Op, Function, integer()}],
@@ -116,7 +115,7 @@ dispatch_work([{reduce, Function, Arg} | Ops], {PartitionNumber, Data}, Coordina
             receive_work({reduce, Function, Arg}, Ops, {Partition, Data}, CoordinatorPid, CollectorPid);
         {error, Error} ->
             ?LOG("RECEIVE_WORK {error, Error} 1 - Error in coordinator listener ~w~n", [Error]),
-            CoordinatorPid ! {job, {self(), {reduce, Function, Arg}, Data}},
+            CoordinatorPid ! {job, {self(), {reduce, Function, Arg}, Data}}, % questo è fondamentalmente sbagliato
             dispatch_work([{reduce, Function, Arg} | Ops], {PartitionNumber, Data}, CoordinatorPid, CollectorPid);
         OtherMessage ->
             ?LOG("RECEIVE_WORK OtherMessage 1 - Unexpected message in coordinator listener ~w~n", [OtherMessage])
@@ -151,10 +150,10 @@ receive_work(Op, Ops, {PartitionNumber, Data}, CoordinatorPid, CollectorPid) ->
     end.
 
 -spec jobs_queue(Workers, DispatchersJobs, FileName, BusyMap) -> ok when
-    BusyMap :: #{gen_tcp:socket() => {pid(), Op, Data}},
     Workers :: [pid()],
     DispatchersJobs :: [{pid(), Op, Data}],
     FileName :: string(),
+    BusyMap :: #{gen_tcp:socket() => {pid(), Op, Data}},
     Op :: {map | reduce | changeKey, atom(), integer()},
     Data :: [{integer(), integer()}].
 
@@ -170,7 +169,7 @@ jobs_queue([Worker | Workers], [Job | Jobs], FileName, BusyMap) ->
             ?LOG("Send error for redispatch work: ~n", [Sock]),
             jobs_queue(Workers1, [Job | Jobs], FileName, BusyMap);
         {error, enotconn} ->
-            ?LOG("Error removed ~w from workers because of error enotconn~n", [Worker]),
+            ?LOG("Error removed ~w from workers because of worker disconnected~n", [Worker]),
             jobs_queue(Workers, [Job | Jobs], FileName, BusyMap);
         Other ->
             ?LOG("Unexpected message waiting in jobs_queue ~w~n", [Other]),
@@ -179,7 +178,7 @@ jobs_queue([Worker | Workers], [Job | Jobs], FileName, BusyMap) ->
 
 jobs_queue(Workers, DispatchersJobs, FileName, BusyMap) ->
     receive
-        {job, Job1} ->
+        {job, Job1} -> 
             jobs_queue(Workers, DispatchersJobs ++ [Job1], FileName, BusyMap); %appends the job
         {join, NewWorker} ->
             jobs_queue([NewWorker | Workers], DispatchersJobs, FileName, BusyMap);

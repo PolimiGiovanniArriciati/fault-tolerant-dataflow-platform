@@ -1,4 +1,4 @@
--module(worker).
+-module(lazy_worker).
 -export([start/0, start/2]).
 -importlib([functions]).
 
@@ -22,6 +22,7 @@ worker_routine(Sock) ->
             {job, {CallerPid, {Operation, Function, Args}, Data}} = binary_to_term(Msg),
             io:format("Worker received job: ~p~n", [[Operation, Function, Args, Data]]),
             Result = erlang:apply(functions, Operation, [Function, Args, Data]),
+            timer:sleep(2000) ,% timeout for showing purposes
             case gen_tcp:send(Sock, term_to_binary({result, CallerPid, Result})) of
                 ok ->
                     worker_routine(Sock);
