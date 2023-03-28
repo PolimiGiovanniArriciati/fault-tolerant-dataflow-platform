@@ -1,5 +1,5 @@
 -module(worker_broken).
--export([start/0, start/1, start/2, ping/2]).
+-export([start/0, start/1, start/2]).
 -importlib([functions, worker]).
 
 start() ->
@@ -21,7 +21,7 @@ start(Host, Port) ->
     
 worker_routine(Sock) ->
     case gen_tcp:recv(Sock, 0) of
-        {ok, _} -> marameo;
+        {ok, _} -> halt();
         {error, closed} ->
             io:fwrite("Connection closed,~n...shutting down the worker"),
             halt();
@@ -30,16 +30,5 @@ worker_routine(Sock) ->
             halt();
         Error ->
             io:format("Unexpected message: ~w~n", [Error]),
-            halt()
-    end,
-    worker_routine(Sock).
-
-ping(Sock, Interval) ->
-    timer:sleep(Interval),
-    case gen_tcp:send(Sock, term_to_binary(ping)) of
-        ok ->
-            ping(Sock, Interval);
-        {error, Error} ->
-            io:fwrite("Error: ~w,~n...shutting down the worker", [Error]),
             halt()
     end.
