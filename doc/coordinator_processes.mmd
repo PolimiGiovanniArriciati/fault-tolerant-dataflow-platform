@@ -1,0 +1,19 @@
+sequenceDiagram
+    participant Workers
+    Main ->>+ Dispatchers: Inputs, Operations
+    loop Every Operation, for every partition
+        opt y is reduce operation
+            Dispatchers ->> Collector: Input[n][y]
+            Note over Dispatchers, Collector: reduces all inputs to a key-list
+            Collector ->> Dispatchers: reduced_input[n][y]
+        end
+        Dispatchers ->>+ Main: Input[n][y], Opeation[y]
+        Main ->>- Workers: Input[n][y], Operation[y]
+        alt success operation
+            Workers ->> Dispatchers: Input[n][y+1] = Output[n][y]
+        else fail or timeout
+            Dispatchers ->>+ Main: Input[n][y], Opeation[y]
+            Main ->>- Workers: Input[n][y], Operation[y]
+        end       
+    end
+    Dispatchers ->>- Main: output[n]

@@ -1,0 +1,14 @@
+partitions = 300
+map add 1
+map subtract 2
+map multiply 3
+map divide 4
+map power 5
+map root 6
+changeKey add 1
+changeKey subtract 2
+changeKey multiply 3
+changeKey divide 4
+changeKey power 5
+changeKey root 6
+reduce add 0
