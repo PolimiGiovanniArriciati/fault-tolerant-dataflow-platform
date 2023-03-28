@@ -6,8 +6,8 @@
 -define(NAME, string:chomp(io:get_line("Input file to process: "))).
 -define(LOG(STRING), io:format("__LOG__ " ++ STRING)).
 -define(LOG(STRING, ARGS), io:format("__LOG__ function: ~p; line: ~p " ++ STRING, [?FUNCTION_NAME, ?LINE] ++ ARGS)).
--define(DEBUG(STRING, ARGS), ok).
-                            %io:format("_DEBUG_ function: ~p; line: ~p " ++ STRING, [?FUNCTION_NAME, ?LINE] ++ ARGS)).
+-define(DEBUG(STRING, ARGS), %ok).
+                              io:format("_DEBUG_ function: ~p; line: ~p " ++ STRING, [?FUNCTION_NAME, ?LINE] ++ ARGS)).
 
 start() ->
     start(8080).
@@ -79,8 +79,8 @@ start_work(Workers, OpFileName1, DataFileName1) ->
     {ok, DataFileName2, InputList} = file_processing:get_data(DataFileName1),
     Inputs = partition:partition(InputList, Npartitions),
     ?LOG("Input: ~p~n", [Inputs]),
-    CollectorPid = spawn(?MODULE, get_results, [self(), #{}, length(Inputs)]),
-    [spawn(?MODULE, dispatch_work, [Ops, Data, self(), CollectorPid, 0]) || Data <- lists:zip(lists:seq(1, length(Inputs)), Inputs)],
+    CollectorPid = spawn_link(?MODULE, get_results, [self(), #{}, length(Inputs)]),
+    [spawn_link(?MODULE, dispatch_work, [Ops, Data, self(), CollectorPid, 0]) || Data <- lists:zip(lists:seq(1, length(Inputs)), Inputs)],
     jobs_queue(Workers, [], DataFileName2++OpFileName2, #{}).
 
 -spec dispatch_work(Ops, Input, CoordinatorPid, CollectorPid, Counter) -> ok when
@@ -106,7 +106,7 @@ dispatch_work([{reduce, Function, Arg} | Ops], {_, Data}, CoordinatorPid, Collec
             CoordinatorPid ! {job, {self(), OperationCounter, {reduce, Function, Arg}, ResultToReduce}},
             receive_work({reduce, Function, Arg}, Ops, {PartitionNumber, Data}, CoordinatorPid, CollectorPid, OperationCounter);
         OtherMessage ->
-            ?LOG("RECEIVE_WORK OtherMessage 1 - Unexpected message in coordinator listener ~w~n", [OtherMessage])
+            ?LOG("Unexpected message in coordinator listener: ~w~n", [OtherMessage])
     end;
 
 dispatch_work([Op | Ops], {PartitionNumber, Data}, CoordinatorPid, CollectorPid, OperationCounter) ->
@@ -117,14 +117,14 @@ dispatch_work([Op | Ops], {PartitionNumber, Data}, CoordinatorPid, CollectorPid,
 receive_work(Op, Ops, {PartitionNumber, Data}, CoordinatorPid, CollectorPid, OperationCounter) ->
     receive
         {result, ResOperationCounter, Result} when OperationCounter == ResOperationCounter->
-            ?DEBUG("RECEIVE_WORK {result, Result}:~w~n", [Result]),
+            ?DEBUG("{result, Result}: ~w~n", [[ResOperationCounter, Result]]),
             dispatch_work(Ops, {PartitionNumber, Result}, CoordinatorPid, CollectorPid, OperationCounter+1);
         {error, Error} ->
-            ?DEBUG("RECEIVE_WORK {error, Error} Error in coordinator listener ~w~n", [Error]),
+            ?DEBUG("{error, Error} Error in coordinator listener: ~w~n", [Error]),
             CoordinatorPid ! {job, {self(), OperationCounter, Op, Data}}, % Send with high priority this task to remaining workers
             receive_work(Op, Ops, {PartitionNumber, Data}, CoordinatorPid, CollectorPid, OperationCounter);
         OtherMsg ->
-            ?LOG("RECEIVE_WORK Other. Unexpected message in coordinator listener ~w~n", [OtherMsg]),
+            ?LOG("Error message in coordinator listener: ~w~n", [OtherMsg]),
             receive_work(Op, Ops, {PartitionNumber, Data}, CoordinatorPid, CollectorPid, OperationCounter)
     end.
 
@@ -139,20 +139,21 @@ receive_work(Op, Ops, {PartitionNumber, Data}, CoordinatorPid, CollectorPid, Ope
 jobs_queue([Worker | Workers], [Job | Jobs], FileName, BusyMap) ->
     case gen_tcp:send(Worker, term_to_binary({job, Job})) of
         ok ->
-            ?LOG("Sent job to worker: ~p~n", [{job, Job}]),
+            ?DEBUG("Sent job to worker: ~p~n", [{job, Job}]),
+            ?DEBUG("Workers: ~p~n", [Workers]),
             jobs_queue(Workers, Jobs, FileName, BusyMap#{Worker => Job});
         {error, enotconn} ->
-            ?LOG("Error removed ~w from workers because of error enotconn~n", [Worker]),
+            ?LOG("~w removed from workers because of connection error ~n", [Worker]),
             jobs_queue(Workers, [Job | Jobs], FileName, BusyMap);
         Other ->
-            ?LOG("JOBS QUEUE 1 -Unexpected message waiting in jobs_queue ~w~n", [Other]),
+            ?LOG("Unexpected message: ~w~n", [Other]),
             jobs_queue(Workers, [Job | Jobs], FileName, BusyMap)
     end;
 
 jobs_queue(Workers, DispatchersJobs, FileName, BusyMap) ->
     receive
         {job, Job1} ->
-            ?LOG("Received job from coordinator: ~p~n", [Job1]),
+            ?DEBUG("Received job from dispacher: ~w~n", [Job1]),
             case not lists:member(Job1, DispatchersJobs) andalso not lists:member(Job1, maps:values(BusyMap)) of
                 true -> jobs_queue(Workers, DispatchersJobs ++ [Job1], FileName, BusyMap);
                 false -> jobs_queue(Workers, DispatchersJobs, FileName, BusyMap) end;
@@ -188,15 +189,15 @@ jobs_queue(Workers, DispatchersJobs, FileName, BusyMap) ->
     N :: integer().
 
 get_results(CoordinatorPid, OutputMap, 0) ->
-    ?LOG("All results received, sending to the coordinator~n"),
+    ?DEBUG("All results received, sending to the coordinator~n", []),
     Output = lists:flatten(maps:values(OutputMap)),
     CoordinatorPid ! {done_work, Output};
 
 get_results(CoordinatorPid, OutputMap, NPartitions) ->
     receive
         {end_dataflow_partition, {PartitionNumber, Output}} ->
-            ?LOG("Received result from partition ~w~n", [PartitionNumber]),
-            ?LOG("OutputMap: ~w~n", [OutputMap]),
+            ?DEBUG("Received result from partition ~w~n", [PartitionNumber]),
+            ?DEBUG("OutputMap: ~w~n", [OutputMap]),
             OutputMap1 = maps:put(PartitionNumber, Output, OutputMap),
             get_results(CoordinatorPid, OutputMap1, NPartitions-1);
         {reduce_prep, Data, DispatcherId} ->
@@ -220,7 +221,7 @@ prepare_reduce_input(DispatcherIds, Datas, NPartitions, NReceived) when NPartiti
 prepare_reduce_input(DispatchersIds, Data, NPartitions, NReceived) when NPartitions == NReceived -> 
     % Reduce all the partitions into a list {Key, ListOfValues} and then re-partition it
     % It's needed because the keys may be distributed across more partition
-    ?LOG("Ready to transform input ~w for reduce~n", [Data]),
+    ?DEBUG("Ready to transform input ~w for reduce~n", [Data]),
     MapReduce = lists:foldl(
                 fun({Key, Value}, Acc) ->
                     case maps:is_key(Key, Acc) of
@@ -257,7 +258,7 @@ socket_listener(CoordinatorPid, Sock) ->
                     CoordinatorPid ! {join, Sock};
                 ping -> ?DEBUG("Ping received from socket ~p~n", [Sock]);
                 {result, DispatcherId, Counter, Result} ->
-                    ?DEBUG("Received result for dispatcher ~w with counter: ~w and result: ~w~n", [DispatcherId, Counter, Result]),
+                    ?LOG("Received result for dispatcher ~w with counter: ~w and result: ~w~n", [DispatcherId, Counter, Result]),
                     CoordinatorPid ! {join, Sock},
                     DispatcherId   ! {result, Counter, Result};
                 worker_resend ->
