@@ -17,7 +17,7 @@ start(Port) ->
     case gen_tcp:listen(Port, [binary, {packet, 0}, {active, false}, {buffer, 16384}]) of
         {ok, AcceptSock} -> 
             ?LOG("AcceptSocket generated, ready to listen for new workers on port ~p~n", [Port]),
-            spawn(?MODULE, accept_connection, [self(), AcceptSock]),
+            spawn_link(?MODULE, accept_connection, [self(), AcceptSock]),
             coordinator([]);
         {error, eaddrinuse} ->
             ?LOG("Port ~p already in use trying next one~n", [Port]),
@@ -30,7 +30,7 @@ accept_connection(CoordinatorPid, AcceptSock) ->
     case gen_tcp:accept(AcceptSock) of
         {ok, Sock} ->
             ?LOG("Coordinator accepted a new connection~n"),
-            spawn(?MODULE, socket_listener, [CoordinatorPid, Sock]);
+            spawn_link(?MODULE, socket_listener, [CoordinatorPid, Sock]);
         {error, Error} ->
             timer:sleep(1000),
             ?LOG("Unexpected error during socket accept!! ~w~n", [Error])
