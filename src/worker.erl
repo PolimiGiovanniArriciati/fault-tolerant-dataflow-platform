@@ -22,27 +22,18 @@ start(Host, Port) ->
 worker_routine(Sock) ->
     case gen_tcp:recv(Sock, 0) of
         {ok, Msg} ->
-            try_execute_job(Sock, Msg);
+            try_execute_job(Sock, Msg),
+            worker_routine(Sock);
         {error, closed} ->
             io:fwrite("Connection closed,~n...shutting down the worker"),
             halt();
         {error, Error} ->
             io:fwrite("Error: ~w,~n...shutting down the worker", [Error]),
             halt();
-        ping ->
-            io:format("Worker received ping~n"),
-            case gen_tcp:send(Sock, term_to_binary(ping)) of
-                ok ->
-                    worker_routine(Sock);
-                {error, Error} ->
-                    io:fwrite("Error: ~w,~n...shutting down the worker", [Error]),
-                    halt()
-            end;
         Error ->
             io:format("Unexpected message: ~w~n", [Error]),
             halt()
-    end,
-    worker_routine(Sock).
+    end.
 
 ping(Sock, Interval) ->
     timer:sleep(Interval),
@@ -60,20 +51,25 @@ try_execute_job(Sock, Msg) ->
         io:format("Worker received job: ~w~n", [[Operation, Function, Args, Counter, Data]]),
         Result = erlang:apply(functions, Operation, [Function, Args, Data]),
         case gen_tcp:send(Sock, term_to_binary({result, CallerPid, Counter, Result})) of
-            ok ->
-                worker_routine(Sock);
             {error, Error} ->
-                io:fwrite("Error: ~w,~n...shutting down the worker", [Error]),
-                halt()
+                io:fwrite("Error: ~w,~n...shutting down the worker", [Error]);
+            _ -> ok         
         end
     catch
-        _:_ ->
+        error:X ->
+            io:format("Worker could not execute job: ~w~n", [X]),
             io:format("Worker could not parse message: ~w~n", [Msg]),
             case gen_tcp:send(Sock, term_to_binary(worker_resend)) of
-                ok ->
-                    worker_routine(Sock);
                 {error, Error1} ->
-                    io:fwrite("Error: ~w,~n...shutting down the worker", [Error1]),
-                    halt()
+                    io:fwrite("Error: ~w,~n...shutting down the worker", [Error1]);
+                _ -> ok
+            end;
+        exit:X ->
+            io:format("Worker could not execute job: ~w~n", [X]),
+            io:format("Worker could not parse message: ~w~n", [Msg]),
+            case gen_tcp:send(Sock, term_to_binary(worker_resend)) of
+                {error, Error2} ->
+                    io:fwrite("Error: ~w,~n...shutting down the worker", [Error2]);
+                _ -> ok
             end
     end.

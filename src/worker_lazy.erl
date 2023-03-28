@@ -23,7 +23,8 @@ worker_routine(Sock) ->
     case gen_tcp:recv(Sock, 0) of
         {ok, Msg} ->
             timer:sleep(1000),
-            worker:try_execute_job(Sock, Msg);
+            worker:try_execute_job(Sock, Msg),
+            worker_routine(Sock);
         {error, closed} ->
             io:fwrite("Connection closed,~n...shutting down the worker"),
             halt();
@@ -33,5 +34,4 @@ worker_routine(Sock) ->
         Error ->
             io:format("Unexpected message: ~w~n", [Error]),
             halt()
-    end,
-    worker_routine(Sock).
+    end.
