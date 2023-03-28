@@ -1,5 +1,5 @@
 -module(functions).
--export([map/3, changeKey/3, reduce/3, add/2, subtract/2, multiply/2, divide/2, power/2, sqrt/1, sum/3, prime_factor_decomposition/1]).
+-export([map/3, changeKey/3, reduce/3, add/2, subtract/2, multiply/2, divide/2, power/2, root/2]).
 -compile({no_warn_unused_function}).
 
 -spec map(Fun, Arg, ListKV) -> ListKV when
@@ -44,7 +44,7 @@ reduce(Fun, Arg, [X | Xs]) ->
 
 reduce(Fun, Arg, {Key, Values}) ->
 	[{Key,
-	 lists:foldl(fun(X, Acc) -> apply(?MODULE, Fun, [X, Acc]) end,
+	 lists:foldl(fun(V, Acc) -> apply(?MODULE, Fun, [V, Acc]) end,
 				 Arg,
 				 Values)}].
 	
@@ -63,28 +63,5 @@ divide(X, Y) ->
 power(X, Y) ->
 	math:pow(X, Y).
 
-sqrt(X) ->
-	math:sqrt(X).
-
-sum(X, Y, Acc) ->
-		Acc + X + Y.
-
-prime_factor_decomposition(X) when X > 2 ->
-		{_, Factors} = factor(X, 2, []),
-		Factors;
-
-prime_factor_decomposition(X) ->
-		[X].
-
-factor(X, N, Acc) ->
-	case X rem N of
-		0 ->
-			factor(X div N, N, [N | Acc]);
-		_ ->
-			if
-				N * N < X ->
-					factor(X, N + 1, Acc);
-				true -> % is prime
-					{ok, lists:reverse([X | Acc])}
-			end
-	end.
+root(X, Y) ->
+	math:pow(X, 1 / Y).

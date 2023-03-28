@@ -70,18 +70,18 @@ coordinator(Workers) ->
     end.
 
 start_work(Workers) ->
-    OpFile = get_in("Input operations to execute: "),
-    DataFile = get_in("Input file to process: "),
-    start_work(Workers, OpFile, DataFile).
+    OpFileName = get_in("Input file containing operations to execute: "),
+    DataFileName = get_in("Input file containing data to be processed: "),
+    start_work(Workers, OpFileName, DataFileName).
     
-start_work(Workers, OpFile, DataFile) ->
-    {ok, _, Npartitions, Ops} = file_processing:get_operations(OpFile),
-    {ok, DataFileName, InputList} = file_processing:get_data(DataFile),
+start_work(Workers, OpFileName1, DataFileName1) ->
+    {ok, OpFileName2, Npartitions, Ops} = file_processing:get_operations(OpFileName1),
+    {ok, DataFileName2, InputList} = file_processing:get_data(DataFileName1),
     Inputs = partition:partition(InputList, Npartitions),
     ?LOG("Input: ~p~n", [Inputs]),
     CollectorPid = spawn(?MODULE, get_results, [self(), #{}, length(Inputs)]),
     [spawn(?MODULE, dispatch_work, [Ops, Data, self(), CollectorPid, 0]) || Data <- lists:zip(lists:seq(1, length(Inputs)), Inputs)],
-    jobs_queue(Workers, [], DataFileName, #{}).
+    jobs_queue(Workers, [], DataFileName2++OpFileName2, #{}).
 
 -spec dispatch_work(Ops, Input, CoordinatorPid, CollectorPid, Counter) -> ok when
     Ops :: [{Op, Function, integer()}],

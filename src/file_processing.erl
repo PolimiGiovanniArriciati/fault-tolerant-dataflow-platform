@@ -18,7 +18,9 @@ read_op(File, FileName) ->
 
 read_op(File, Ops, {ok, Line}) ->
 	{Op, Fun, Arg} = split_operations(Line),
-	read_op(File, [{Op, Fun, Arg} | Ops], file:read_line(File));
+	read_op(File,
+			[{Op, Fun, Arg} | Ops],
+			file:read_line(File));
 
 read_op(File, Ops, eof) ->
 	file:close(File),
@@ -29,8 +31,8 @@ split_operations(Operation) ->
 	{erlang:list_to_atom(Op),
 	 erlang:list_to_atom(Fun),
 	 case string:to_integer(Arg) of
-		{N, _} -> N;
-		_ -> 0 end}. 
+		{N, _} -> N
+		end}. 
 
 get_data(FileName) ->
 	case file:open("in/"++FileName, [read, raw]) of
@@ -38,7 +40,7 @@ get_data(FileName) ->
 			read_data(File, FileName, file:read_line(File), []);
 		{error, Reason} ->
 			io:format("Error opening the data file - reason: ~p~n", [Reason]),
-			{error, Reason}
+			get_data(get_in("Input file containing data to be processed: "))
 	end.
 
 read_data(File, FileName, {ok, Line}, Acc) ->
