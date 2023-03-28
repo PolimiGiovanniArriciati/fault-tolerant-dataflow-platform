@@ -6,8 +6,8 @@
 -define(NAME, string:chomp(io:get_line("Input file to process: "))).
 -define(LOG(STRING), io:format("__LOG__ " ++ STRING)).
 -define(LOG(STRING, ARGS), io:format("__LOG__ function: ~p; line: ~p " ++ STRING, [?FUNCTION_NAME, ?LINE] ++ ARGS)).
--define(DEBUG(STRING, ARGS), %ok).
-                              io:format("_DEBUG_ function: ~p; line: ~p " ++ STRING, [?FUNCTION_NAME, ?LINE] ++ ARGS)).
+-define(DEBUG(STRING, ARGS), ok).
+                              %io:format("_DEBUG_ function: ~p; line: ~p " ++ STRING, [?FUNCTION_NAME, ?LINE] ++ ARGS)).
 
 start() ->
     start(8080).
