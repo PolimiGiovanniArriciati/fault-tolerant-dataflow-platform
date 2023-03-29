@@ -252,7 +252,7 @@ prepare_reduce_input(DispatchersIds, Data, NPartitions, NReceived) when NPartiti
 socket_listener(CoordinatorPid, Sock) ->
     case gen_tcp:recv(Sock, 0, 5000) of
         {ok, Msg} ->
-            case binary_to_term(Msg) of 
+            case binary_to_term(Msg) of
                 join -> 
                     ?LOG("New worker has joined~n"),
                     CoordinatorPid ! {join, Sock};
@@ -273,6 +273,7 @@ socket_listener(CoordinatorPid, Sock) ->
         Else ->
             ?LOG("Socket listener: Error in coordinator listener ~w~n", [Else]),
             ?LOG("Closing the socket~n"),
+            gen_tcp:close(Sock),
             CoordinatorPid ! {error, Sock, Else}
     end.
 

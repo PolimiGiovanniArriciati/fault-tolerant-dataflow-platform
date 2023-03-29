@@ -46,7 +46,7 @@ ping(Sock, Interval) ->
     end.
 
 try_execute_job(Sock, Msg) ->
-    try 
+    try
         {job, {CallerPid, Counter, {Operation, Function, Args}, Data}} = binary_to_term(Msg),
         io:format("Worker received job: ~w~n", [[Operation, Function, Args, Counter, Data]]),
         Result = erlang:apply(functions, Operation, [Function, Args, Data]),
